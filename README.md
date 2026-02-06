@@ -138,7 +138,7 @@ This project is provided as-is. See [LICENSE](LICENSE) for details.
 
 ## Support
 
-For issues, questions, or suggestions, please open an issue on the [GitHub repository](https://github.com/your-org/flutter_workspaces_cli/issues).
+For issues, questions, or suggestions, please open an issue on the [GitHub repository](https://github.com/ThiagoEvoa/flutter_workspaces_cli/issues).
 
 ## Author
 
