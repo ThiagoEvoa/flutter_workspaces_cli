@@ -16,7 +16,7 @@ abstract class WorkspaceProcess {
     final folderName = '${projectName}_workspaces';
     final dir = Directory(folderName);
     dir.createSync(recursive: true);
-    Directory.current = dir.path;
+    Directory.current = dir.absolute.path;
     print('✅ Workspace folder created: $folderName');
   }
 
@@ -31,26 +31,27 @@ abstract class WorkspaceProcess {
   }) {
     print('📝 Creating root pubspec.yaml...');
     final content =
-        '''name: _
-    version: 0.1.0
-    description: A Dart workspace example
-    publish_to: none
+        '''
+name: _
+version: 0.1.0
+description: A Dart workspace example
+publish_to: none
 
-    environment:
-      sdk: ^$dartVersion
+environment:
+  sdk: ^$dartVersion
 
-    workspace:
-      - $projectName
-      - packages/core
+workspace:
+  - $projectName
+  - packages/core
 
-    dependencies:
-      flutter:
-        sdk: flutter
+dependencies:
+  flutter:
+    sdk: flutter
 
-    dev_dependencies:
-      flutter_test:
-        sdk: flutter  
-    ''';
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+''';
 
     final file = File('pubspec.yaml');
     file.writeAsStringSync(content);

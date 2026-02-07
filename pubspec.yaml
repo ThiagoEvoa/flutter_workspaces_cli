@@ -10,6 +10,9 @@ platforms:
 environment:
   sdk: ^3.10.8
 
+executables:
+  flutter_workspaces_cli:
+
 # Add regular dependencies here.
 dependencies:
   path: ^1.9.0

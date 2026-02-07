@@ -36,16 +36,17 @@ abstract class CorePackageProcess {
   static void updateCorePubspecSync({required String dartVersion}) {
     print('📝 Updating core pubspec.yaml...');
     final content =
-        '''name: core
-    description: "A new Flutter package project."
-    version: 0.0.1
+        '''
+name: core
+description: "A new Flutter package project."
+version: 0.0.1
 
-    environment:
-      sdk: ^$dartVersion
-      flutter: ">=1.17.0"
+environment:
+  sdk: ^$dartVersion
+  flutter: ">=1.17.0"
 
-    resolution: workspace
-    ''';
+resolution: workspace
+''';
 
     final file = File('packages/core/pubspec.yaml');
     file.writeAsStringSync(content);
