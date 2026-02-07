@@ -29,13 +29,13 @@ dart pub global activate flutter_workspaces_cli
 Run the CLI with the required `--name` argument to create a new workspace:
 
 ```bash
-dart bin/flutter_workspaces_cli.dart --name my_app
+flutter_workspaces_cli.dart --name my_app
 ```
 
 Or use the short flag:
 
 ```bash
-dart bin/flutter_workspaces_cli.dart -n my_app
+flutter_workspaces_cli.dart -n my_app
 ```
 
 ### What Gets Created
