@@ -68,7 +68,7 @@ The root `pubspec.yaml` includes workspace configuration that allows both the ap
 ### Example
 
 ```bash
-dart bin/flutter_workspaces_cli.dart --name flutter_monorepo
+flutter_workspaces_cli.dart --name flutter_monorepo
 ```
 
 This creates a workspace named `flutter_monorepo_workspaces` with all required structure and dependencies.
