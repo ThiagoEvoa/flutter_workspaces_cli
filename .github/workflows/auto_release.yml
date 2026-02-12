@@ -6,7 +6,7 @@ on:
       - master
     paths:
       - 'pubspec.yaml'
-      - 'changelog.md'
+      - 'CHANGELOG.md'
 
 permissions:
   contents: write
@@ -25,7 +25,7 @@ jobs:
       - name: Validate CHANGELOG
         run: |
           VERSION=${{ steps.get_version.outputs.VERSION }}
-          if ! grep -q "^# $VERSION" changelog.md; then
+          if ! grep -q "^# $VERSION" CHANGELOG.md; then
             echo "::error::CHANGELOG.md is not updated with version $VERSION"
             exit 1
           fi

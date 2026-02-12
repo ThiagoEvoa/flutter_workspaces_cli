@@ -20,7 +20,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}
 
-          if ! grep -q "^# $VERSION" changelog.md; then
+          if ! grep -q "^# $VERSION" CHANGELOG.md; then
             echo "::error::CHANGELOG.md is not updated with version $VERSION"
             exit 1
           fi
