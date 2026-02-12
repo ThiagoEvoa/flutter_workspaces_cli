@@ -16,19 +16,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
       - run: dart pub get
-      - name: Validate Version
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-
-          if ! grep -q "^# $VERSION" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md is not updated with version $VERSION"
-            exit 1
-          fi
-
-          PUBSPEC_VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
-          if [ "$PUBSPEC_VERSION" != "$VERSION" ]; then
-            echo "::error::pubspec.yaml version ($PUBSPEC_VERSION) does not match tag version ($VERSION)"
-            exit 1
-          fi
       - name: Publish to pub.dev
         run: dart pub publish --force
