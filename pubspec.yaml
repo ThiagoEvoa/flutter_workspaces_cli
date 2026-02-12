@@ -1,23 +1,24 @@
 name: flutter_workspaces_cli
 description: A command-line tool for scaffolding and managing monorepo-style Flutter workspace structures.
-version: 1.0.3
+version: 1.1.0
 repository: https://github.com/ThiagoEvoa/flutter_workspaces_cli
+homepage: https://thiagoevoa.com
 platforms:
   macos:
   windows:
   linux: 
 
 environment:
-  sdk: ^3.10.8
+  sdk: ^3.11.0
 
 executables:
   flutter_workspaces_cli:
 
 # Add regular dependencies here.
 dependencies:
-  path: ^1.9.0
+  path: ^1.9.1
   args: ^2.7.0
 
 dev_dependencies:
-  lints: ^6.0.0
-  test: ^1.25.6
+  lints: ^6.1.0
+  test: ^1.29.0

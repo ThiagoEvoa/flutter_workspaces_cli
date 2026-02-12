@@ -22,11 +22,18 @@ void main(List<String> arguments) {
 
     FlutterAppProcess.createFlutterAppSync(projectName: projectName);
 
+    FlutterAppProcess.updateAnalysisOptionsFileSync(projectName: projectName);
+
     FlutterAppProcess.updateFlutterAppWidgetSync(projectName: projectName);
 
     FlutterAppProcess.updateFlutterAppPubspecSync(
       dartVersion: dartVersion,
       projectName: projectName,
+    );
+
+    WorkspaceProcess.moveConfigsToWorkspaceRootSync(
+      projectName: projectName,
+      initialDirectory: initialDirectory,
     );
 
     WorkspaceProcess.createRootPubspecSync(
@@ -40,11 +47,15 @@ void main(List<String> arguments) {
 
     CorePackageProcess.updateCorePubspecSync(dartVersion: dartVersion);
 
+    CommonProcess.deleteFilesSync(filePath: 'packages/core/.gitignore');
+
+    CommonProcess.deleteFilesSync(
+      filePath: 'packages/core/analysis_options.yaml',
+    );
+
     WorkspaceProcess.addingFlutterDependenciesSync();
 
     WorkspaceProcess.addingFlutterDevDependenciesSync();
-
-    FlutterAppProcess.updateAnalysisOptionsFileSync(projectName: projectName);
 
     print('\n🎉 Flutter workspace setup completed successfully!');
   } on ArgumentError catch (e) {

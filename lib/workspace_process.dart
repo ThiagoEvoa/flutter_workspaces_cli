@@ -43,6 +43,8 @@ environment:
 workspace:
   - $projectName
   - packages/core
+  # If using dart 3.11+ with the new workspace syntax, uncomment the line below and remove the `workspace` section above. # - packages/*
+  # - packages/*
 
 dependencies:
   flutter:
@@ -113,6 +115,34 @@ dev_dependencies:
       Process.runSync('flutter', ['pub', 'get'], runInShell: true);
     } catch (_) {
       throw Exception('⚠️ Failed to run Flutter pub get');
+    }
+  }
+
+  /// Moves configuration files from the Flutter app folder to the workspace root.
+  ///
+  /// Moves `.gitignore` and `analysis_options.yaml` so they apply globally.
+  ///
+  /// Parameters:
+  /// - `projectName`: the name of the Flutter app folder.
+  /// Throws:
+  /// - [Exception] with message `⚠️ Failed to move configuration files` on failure.
+  static void moveConfigsToWorkspaceRootSync({
+    required String projectName,
+    required Directory initialDirectory,
+  }) {
+    print('🚚 Moving configuration files to workspace root...');
+    final files = ['.gitignore', 'analysis_options.yaml'];
+
+    for (final fileName in files) {
+      try {
+        final source = File('$projectName/$fileName');
+        if (source.existsSync()) {
+          source.renameSync(fileName);
+          print('✅ Moved $fileName to workspace root');
+        }
+      } catch (_) {
+        throw Exception('⚠️ Failed to move $fileName');
+      }
     }
   }
 }
