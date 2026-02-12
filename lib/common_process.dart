@@ -28,7 +28,7 @@ abstract class CommonProcess {
   /// - `projectName`: the base project name used to determine the workspace folder.
   ///
   /// Throws:
-  /// - [Exception] when the revert (remove) command fails.
+  /// - [Exception] with message `⚠️ Failed to revert workspace processes` on failure.
   static void revertAllProcesses({
     required Directory initialDirectory,
     required String projectName,
@@ -42,6 +42,25 @@ abstract class CommonProcess {
       );
     } catch (_) {
       throw Exception('⚠️ Failed to revert workspace processes');
+    }
+  }
+
+  /// Deletes a file from the specified path.
+  ///
+  /// Parameters:
+  /// - `filePath`: The path to the file.
+  /// Throws:
+  /// - [Exception] with message `⚠️ Failed to delete file` on failure.
+  static void deleteFilesSync({required String filePath}) {
+    try {
+      print('🗑️ Deleting file $filePath...');
+      final file = File(filePath);
+      if (file.existsSync()) {
+        file.deleteSync();
+        print('✅ File deleted successfully: $filePath');
+      }
+    } catch (_) {
+      throw Exception('⚠️ Failed to delete: $filePath');
     }
   }
 }

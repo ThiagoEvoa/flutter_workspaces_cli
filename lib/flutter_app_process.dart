@@ -36,7 +36,8 @@ abstract class FlutterAppProcess {
   static void updateFlutterAppWidgetSync({required String projectName}) {
     print('📝 Updating Flutter app main.dart...');
     final content = '''
-import 'package:core/core.dart';
+// Uncoment the line below to import from the core package once you start using it in your app.
+// import 'package:core/core.dart';
 import 'package:flutter/material.dart';
 
 void main() {
