@@ -1,3 +1,7 @@
+# 1.1.1
+
+Adding changelog validation.
+
 # 1.1.0
 
 Improving the files generation.
