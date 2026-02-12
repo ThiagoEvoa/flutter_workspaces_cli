@@ -1,3 +1,7 @@
+# 1.1.0
+
+Improving the files generation.
+
 # 1.0.3
 
 Adding example file, updating pubspec.yaml project description and updating changelog file.
