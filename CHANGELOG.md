@@ -1,3 +1,7 @@
+# 1.1.2
+
+Updating GitHub action workflow.
+
 # 1.1.1
 
 Adding changelog validation.
