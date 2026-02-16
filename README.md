@@ -45,11 +45,11 @@ After running the command, the following structure is created:
 ```
 my_app_workspaces/
 ├── pubspec.yaml              # Root workspace pubspec
+├── analysis_options.yaml     # Root workspace analysis options
 ├── my_app/                   # Main Flutter application
 │   ├── lib/
 │   │   └── main.dart        # Main entry point (imports core)
 │   ├── pubspec.yaml
-│   └── analysis_options.yaml
 └── packages/
     └── core/                 # Shared core package
         ├── lib/
