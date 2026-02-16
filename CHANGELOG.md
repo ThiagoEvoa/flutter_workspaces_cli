@@ -1,3 +1,7 @@
+# 1.1.2
+
+Updating folder structure example.
+
 # 1.1.1
 
 Adding changelog validation.

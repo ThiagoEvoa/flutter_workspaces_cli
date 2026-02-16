@@ -1,0 +1,49 @@
+name: Check Version Consistency
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }} # Required to trigger downstream workflows
+
+      - name: Get pubspec version
+        id: pubspec
+        # Extracts the version value from the line starting with 'version:'
+        run: echo "version=$(grep '^version:' pubspec.yaml | awk '{print $2}')" >> $GITHUB_OUTPUT
+
+      - name: Get changelog version
+        id: changelog
+        # Extracts the second word (the version) from the first line of CHANGELOG.md
+        run: echo "version=$(head -n 1 CHANGELOG.md | awk '{print $2}')" >> $GITHUB_OUTPUT
+
+      - name: Verify versions match
+        run: |
+          if [ "${{ steps.pubspec.outputs.version }}" != "${{ steps.changelog.outputs.version }}" ]; then
+            echo "::error::Version mismatch! pubspec.yaml: ${{ steps.pubspec.outputs.version }}, CHANGELOG.md: ${{ steps.changelog.outputs.version }}"
+            exit 1
+          else
+            echo "Versions match: ${{ steps.pubspec.outputs.version }}"
+          fi
+
+      - name: Create and Push Tag
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          TAG_NAME="v${{ steps.pubspec.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists. Skipping."
+          else
+            git tag "$TAG_NAME"
+            git push origin "$TAG_NAME"
+          fi

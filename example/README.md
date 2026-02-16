@@ -24,10 +24,17 @@ The command creates a folder named `my_demo_app_workspaces` with the following s
 
 ```text
 my_demo_app_workspaces/
-├── pubspec.yaml              # Root workspace configuration
-├── packages/
-│   └── core/                 # Shared code package
-└── my_demo_app/              # Main Flutter application
+├── pubspec.yaml              # Root workspace pubspec
+├── analysis_options.yaml     # Root workspace analysis options
+├── my_demo_app/                   # Main Flutter application
+│   ├── lib/
+│   │   └── main.dart        # Main entry point (imports core)
+│   ├── pubspec.yaml
+└── packages/
+    └── core/                 # Shared core package
+        ├── lib/
+        │   └── core.dart
+        └── pubspec.yaml
 ```
 
 ## 4. Running the Project
