@@ -1,3 +1,7 @@
+# 1.2.1
+
+Adding validation to Dart 3.11+ to use the new pubspec.yaml workspace syntax.
+
 # 1.2.0
 
 New Feature: Added add-package command to create new packages within an existing workspace.

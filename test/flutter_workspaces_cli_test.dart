@@ -105,6 +105,71 @@ void main() {
       expect(file.existsSync(), isTrue);
       expect(file.readAsStringSync(), contains('name: _'));
     });
+
+    test('createRootPubspecSync uses packages/* for Dart 3.11+', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      process.createRootPubspecSync(dartVersion: '3.11.0', projectName: 'app');
+      final content = fs.file('pubspec.yaml').readAsStringSync();
+      expect(content, contains('- packages/*'));
+      expect(content, isNot(contains('- packages/core')));
+    });
+
+    test('updateRootPubspecSync skips addition if packages/* is present', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs.file('pubspec.yaml').writeAsStringSync('''
+name: _
+workspace:
+  - app
+  - packages/*
+''');
+
+      process.updateRootPubspecSync(packageName: 'new_pkg');
+
+      final content = fs.file('pubspec.yaml').readAsStringSync();
+      expect(content, isNot(contains('- packages/new_pkg')));
+      expect(logs, contains(contains('Wildcard "packages/*" detected')));
+    });
+
+    test('updateRootPubspecSync appends new package to workspace section', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs.file('pubspec.yaml').writeAsStringSync('''
+name: _
+workspace:
+  - app
+  - packages/core
+''');
+
+      process.updateRootPubspecSync(packageName: 'new_pkg');
+
+      final content = fs.file('pubspec.yaml').readAsStringSync();
+      expect(content, contains('- packages/new_pkg'));
+      expect(content, contains('- packages/core'));
+    });
+
+    test('updateRootPubspecSync does not add duplicate package', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs.file('pubspec.yaml').writeAsStringSync('''
+name: _
+workspace:
+  - packages/existing
+''');
+
+      process.updateRootPubspecSync(packageName: 'existing');
+
+      final content = fs.file('pubspec.yaml').readAsStringSync();
+      final occurrences = 'packages/existing'.allMatches(content).length;
+      expect(occurrences, equals(1));
+    });
+
+    test('updateRootPubspecSync throws when workspace section is missing', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs.file('pubspec.yaml').writeAsStringSync('name: _');
+
+      expect(
+        () => process.updateRootPubspecSync(packageName: 'any'),
+        throwsException,
+      );
+    });
   });
 
   group('PackageProcess', () {
@@ -155,6 +220,7 @@ void main() {
       );
 
       fs.directory('packages').createSync();
+      fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
 
       when(() => runner.runSync('dart', ['--version'])).thenReturn(
         ProcessRunnerResult(
@@ -188,6 +254,7 @@ void main() {
       addPackageRunner.run(['--name', 'new_pkg']);
 
       expect(fs.file('packages/new_pkg/pubspec.yaml').existsSync(), isTrue);
+      expect(fs.file('pubspec.yaml').readAsStringSync(), contains('- packages/new_pkg'));
       expect(logs, contains(contains('Package "new_pkg" added successfully!')));
     });
 

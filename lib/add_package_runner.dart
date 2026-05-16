@@ -6,6 +6,7 @@ import 'dart_process.dart';
 import 'setup_runner.dart';
 import 'project_name_process.dart';
 import 'common_process.dart';
+import 'workspace_process.dart';
 
 /// Runner that orchestrates adding a new package to an existing workspace.
 class AddPackageRunner {
@@ -25,6 +26,7 @@ class AddPackageRunner {
     final dart = DartProcess(runner: runner, log: log);
     final projectNameProcess = ProjectNameProcess(log: log);
     final common = CommonProcess(fs: fs, runner: runner, log: log);
+    final workspaceProcess = WorkspaceProcess(fs: fs, runner: runner, log: log);
 
     try {
       final packageName = projectNameProcess.getProjectName(arguments: arguments);
@@ -40,6 +42,9 @@ class AddPackageRunner {
         packageName: packageName,
         dartVersion: dartVersion,
       );
+
+      workspaceProcess.updateRootPubspecSync(packageName: packageName);
+      workspaceProcess.runningFlutterPubGetSync();
 
       log('\n🎉 Package "$packageName" added successfully!');
     } on ArgumentError catch (e) {
