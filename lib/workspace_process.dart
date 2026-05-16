@@ -41,6 +41,13 @@ class WorkspaceProcess {
     required String projectName,
   }) {
     log('📝 Creating root pubspec.yaml...');
+    final isDart311OrHigher = _isVersionAtLeast(dartVersion, 3, 11);
+
+    final workspaceSection =
+        isDart311OrHigher
+            ? '  - $projectName\n  - packages/*'
+            : '  - $projectName\n  - packages/core';
+
     final content = '''
 name: _
 version: 0.1.0
@@ -51,10 +58,7 @@ environment:
   sdk: ^$dartVersion
 
 workspace:
-  - $projectName
-  - packages/core
-  # If using dart 3.11+ with the new workspace syntax, uncomment the line below and remove the `workspace` section above. # - packages/*
-  # - packages/*
+$workspaceSection
 
 dependencies:
   flutter:
@@ -128,6 +132,53 @@ dev_dependencies:
     }
   }
 
+  /// Updates the root `pubspec.yaml` to include a new package in the workspace.
+  ///
+  /// Parameters:
+  /// - `packageName`: the name of the new package to add.
+  void updateRootPubspecSync({required String packageName}) {
+    log('📝 Updating root pubspec.yaml to include "$packageName"...');
+    final file = fs.file('pubspec.yaml');
+
+    if (!file.existsSync()) {
+      throw Exception('⚠️ Root pubspec.yaml not found.');
+    }
+
+    final content = file.readAsStringSync();
+
+    if (content.contains('- packages/*')) {
+      log('ℹ️ Wildcard "packages/*" detected. Skipping manual addition of "$packageName".');
+      return;
+    }
+
+    final packagePath = 'packages/$packageName';
+
+    if (content.contains('- $packagePath')) {
+      log('ℹ️ Package "$packageName" is already in the workspace.');
+      return;
+    }
+
+    final lines = content.split('\n');
+    final workspaceIndex = lines.indexWhere((line) => line.trim() == 'workspace:');
+
+    if (workspaceIndex == -1) {
+      throw Exception('⚠️ "workspace:" section not found in root pubspec.yaml.');
+    }
+
+    // Find the end of the workspace list
+    int insertIndex = workspaceIndex + 1;
+    while (insertIndex < lines.length &&
+        (lines[insertIndex].trim().startsWith('-') ||
+            lines[insertIndex].trim().isEmpty ||
+            lines[insertIndex].trim().startsWith('#'))) {
+      insertIndex++;
+    }
+
+    lines.insert(insertIndex, '  - $packagePath');
+    file.writeAsStringSync(lines.join('\n'));
+    log('✅ Root pubspec.yaml updated');
+  }
+
   /// Moves configuration files from the Flutter app folder to the workspace root.
   ///
   /// Moves `.gitignore` and `analysis_options.yaml` so they apply globally.
@@ -155,5 +206,23 @@ dev_dependencies:
         throw Exception('⚠️ Failed to move $fileName');
       }
     }
+  }
+
+  bool _isVersionAtLeast(
+    String version,
+    int majorThreshold,
+    int minorThreshold,
+  ) {
+    final cleanVersion =
+        version.startsWith('^') ? version.substring(1) : version;
+    final parts = cleanVersion.split('.');
+    if (parts.isEmpty) return false;
+
+    final major = int.tryParse(parts[0]) ?? 0;
+    final minor = parts.length > 1 ? (int.tryParse(parts[1]) ?? 0) : 0;
+
+    if (major > majorThreshold) return true;
+    if (major == majorThreshold && minor >= minorThreshold) return true;
+    return false;
   }
 }
