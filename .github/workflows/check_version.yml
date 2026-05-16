@@ -13,8 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GH_PAT }} # Required to trigger downstream workflows
 
       - name: Get pubspec version
         id: pubspec
@@ -45,5 +43,9 @@ jobs:
             echo "Tag $TAG_NAME already exists. Skipping."
           else
             git tag "$TAG_NAME"
-            git push origin "$TAG_NAME"
+            if [ -n "${{ secrets.GH_PAT }}" ]; then
+              git push https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git "$TAG_NAME"
+            else
+              git push origin "$TAG_NAME"
+            fi
           fi

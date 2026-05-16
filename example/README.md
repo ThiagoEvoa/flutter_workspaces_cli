@@ -1,6 +1,6 @@
 # Flutter Workspaces CLI Example
 
-This example demonstrates how to use the `flutter_workspaces_cli` to scaffold a new monorepo project.
+This example demonstrates how to use the `flutter_workspaces_cli` to scaffold a new monorepo project and manage it.
 
 ## 1. Installation
 
@@ -37,7 +37,18 @@ my_demo_app_workspaces/
         └── pubspec.yaml
 ```
 
-## 4. Running the Project
+## 4. Adding a New Package
+
+You can add more packages to your workspace using the `add-package` command:
+
+```bash
+cd my_demo_app_workspaces
+flutter_workspaces_cli add-package --name shared_ui
+```
+
+This will create a new package in `packages/shared_ui`.
+
+## 5. Running the Project
 
 Navigate to the new workspace and run the app:
 

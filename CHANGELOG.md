@@ -1,3 +1,12 @@
+# 1.2.0
+
+New Feature: Added add-package command to create new packages within an existing workspace.
+Architectural Refactor: Implemented Dependency Injection (DI) with FileSystem and ProcessRunner abstractions, improving testability and adhering to SOLID principles.
+Improved Testability: Migration to 100% unit testing using MemoryFileSystem and mock processes.
+New Runners: Introduced SetupRunner and AddPackageRunner for better separation of concerns.
+Generalized Package Creation: Refactored package creation logic into a reusable PackageProcess service.
+Documentation: Updated READMEs and examples to reflect new command and architecture.
+
 # 1.1.2
 
 Updating folder structure example.

@@ -1,24 +1,31 @@
-import 'dart:io';
-
 import 'package:args/args.dart';
+import 'package:file/file.dart';
+
+import 'process_runner.dart';
 
 /// Common CLI helpers used across the package.
 ///
 /// Shared utilities for printing usage, remembering the initial working
 /// directory, and performing a simple revert operation when an error occurs.
-abstract class CommonProcess {
+class CommonProcess {
+  final FileSystem fs;
+  final ProcessRunner runner;
+  final void Function(String) log;
+
+  CommonProcess({required this.fs, required this.runner, this.log = print});
+
   /// Prints a brief usage summary followed by the parser usage details.
   ///
   /// Parameters:
   /// - `parser`: the [ArgParser] configured with available options.
-  static void printUsage(ArgParser parser) {
-    print('\nUsage: dart flutter_workspaces_cli.dart [arguments]');
-    print(parser.usage);
+  void printUsage(ArgParser parser) {
+    log('\nUsage: dart flutter_workspaces_cli.dart [arguments]');
+    log(parser.usage);
   }
 
   /// Returns the directory where the CLI was initially invoked.
-  static Directory getInitialDirectory() {
-    return Directory.current;
+  Directory getInitialDirectory() {
+    return fs.currentDirectory;
   }
 
   /// Attempts to remove the created workspace folder when reverting.
@@ -29,12 +36,12 @@ abstract class CommonProcess {
   ///
   /// Throws:
   /// - [Exception] with message `⚠️ Failed to revert workspace processes` on failure.
-  static void revertAllProcesses({
+  void revertAllProcesses({
     required Directory initialDirectory,
     required String projectName,
   }) {
     try {
-      Process.runSync(
+      runner.runSync(
         'rm',
         ['-rf', '${projectName}_workspaces'],
         workingDirectory: initialDirectory.path,
@@ -51,13 +58,13 @@ abstract class CommonProcess {
   /// - `filePath`: The path to the file.
   /// Throws:
   /// - [Exception] with message `⚠️ Failed to delete file` on failure.
-  static void deleteFilesSync({required String filePath}) {
+  void deleteFilesSync({required String filePath}) {
     try {
-      print('🗑️ Deleting file $filePath...');
-      final file = File(filePath);
+      log('🗑️ Deleting file $filePath...');
+      final file = fs.file(filePath);
       if (file.existsSync()) {
         file.deleteSync();
-        print('✅ File deleted successfully: $filePath');
+        log('✅ File deleted successfully: $filePath');
       }
     } catch (_) {
       throw Exception('⚠️ Failed to delete: $filePath');
