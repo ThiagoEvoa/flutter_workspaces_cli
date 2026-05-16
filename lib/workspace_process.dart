@@ -1,37 +1,47 @@
-import 'dart:io';
+import 'package:file/file.dart';
+import 'process_runner.dart';
 
 /// Utilities for creating and configuring a Flutter workspace directory.
 ///
 /// This class provides synchronous helpers used by the CLI to scaffold a
 /// workspace, create package folders, add common dependencies, and resolve
 /// workspace dependencies.
-abstract class WorkspaceProcess {
+class WorkspaceProcess {
+  final FileSystem fs;
+  final ProcessRunner runner;
+  final void Function(String) log;
+
+  WorkspaceProcess({
+    required this.fs,
+    required this.runner,
+    this.log = print,
+  });
+
   /// Creates `<name>_workspaces` and changes the current working directory.
   ///
   /// Parameters:
-  /// - `name`: base name for the workspace (e.g. `my_app`). The folder created
+  /// - `projectName`: base name for the workspace (e.g. `my_app`). The folder created
   ///   will be `my_app_workspaces` and `Directory.current` will be set to it.
-  static void createWorkspaceFolderSync({required String projectName}) {
-    print('📁 Creating workspace folder...');
+  void createWorkspaceFolderSync({required String projectName}) {
+    log('📁 Creating workspace folder...');
     final folderName = '${projectName}_workspaces';
-    final dir = Directory(folderName);
+    final dir = fs.directory(folderName);
     dir.createSync(recursive: true);
-    Directory.current = dir.absolute.path;
-    print('✅ Workspace folder created: $folderName');
+    fs.currentDirectory = dir;
+    log('✅ Workspace folder created: $folderName');
   }
 
   /// Writes the workspace root `pubspec.yaml` with basic configuration.
   ///
   /// Parameters:
-  /// - `sdkVersion`: Dart SDK version constraint (e.g. `3.10.8`).
-  /// - `name`: the main application folder name included in the workspace.
-  static void createRootPubspecSync({
+  /// - `dartVersion`: Dart SDK version constraint (e.g. `3.10.8`).
+  /// - `projectName`: the main application folder name included in the workspace.
+  void createRootPubspecSync({
     required String dartVersion,
     required String projectName,
   }) {
-    print('📝 Creating root pubspec.yaml...');
-    final content =
-        '''
+    log('📝 Creating root pubspec.yaml...');
+    final content = '''
 name: _
 version: 0.1.0
 description: A Dart workspace example
@@ -55,32 +65,32 @@ dev_dependencies:
     sdk: flutter
 ''';
 
-    final file = File('pubspec.yaml');
+    final file = fs.file('pubspec.yaml');
     file.writeAsStringSync(content);
-    print('✅ Root pubspec.yaml created');
+    log('✅ Root pubspec.yaml created');
   }
 
   /// Creates the `packages` folder used for shared packages.
-  static void createPackagesFolderSync() {
-    print('📁 Creating packages folder...');
-    final dir = Directory('packages');
+  void createPackagesFolderSync() {
+    log('📁 Creating packages folder...');
+    final dir = fs.directory('packages');
     dir.createSync(recursive: true);
-    print('✅ Packages folder created');
+    log('✅ Packages folder created');
   }
 
   /// Adds common runtime Flutter dependencies to the workspace pubspec.
   ///
   /// Throws:
   /// - [Exception] with message `⚠️ Failed to add Flutter dependencies` on failure.
-  static void addingFlutterDependenciesSync() {
+  void addingFlutterDependenciesSync() {
     try {
-      print('📦 Adding Flutter dependencies...');
-      Process.runSync('flutter', [
+      log('📦 Adding Flutter dependencies...');
+      runner.runSync('flutter', [
         'pub',
         'add',
         'cupertino_icons',
       ], runInShell: true);
-      print('✅ Flutter dependencies added');
+      log('✅ Flutter dependencies added');
     } catch (_) {
       throw Exception('⚠️ Failed to add Flutter dependencies');
     }
@@ -90,17 +100,17 @@ dev_dependencies:
   ///
   /// Throws:
   /// - [Exception] with message `⚠️ Failed to add Flutter dev dependencies` on failure.
-  static void addingFlutterDevDependenciesSync() {
+  void addingFlutterDevDependenciesSync() {
     try {
-      print('📦 Adding Flutter dev dependencies...');
-      Process.runSync('flutter', [
+      log('📦 Adding Flutter dev dependencies...');
+      runner.runSync('flutter', [
         'pub',
         'add',
         '--dev',
         'flutter_lints',
         'custom_lint',
       ], runInShell: true);
-      print('✅ Flutter dev dependencies added');
+      log('✅ Flutter dev dependencies added');
     } catch (_) {
       throw Exception('⚠️ Failed to add Flutter dev dependencies');
     }
@@ -110,9 +120,9 @@ dev_dependencies:
   ///
   /// Throws:
   /// - [Exception] with message `⚠️ Failed to run Flutter pub get` on failure.
-  static void runningFlutterPubGetSync() {
+  void runningFlutterPubGetSync() {
     try {
-      Process.runSync('flutter', ['pub', 'get'], runInShell: true);
+      runner.runSync('flutter', ['pub', 'get'], runInShell: true);
     } catch (_) {
       throw Exception('⚠️ Failed to run Flutter pub get');
     }
@@ -124,21 +134,22 @@ dev_dependencies:
   ///
   /// Parameters:
   /// - `projectName`: the name of the Flutter app folder.
+  /// - `initialDirectory`: the directory that was current before scaffolding.
   /// Throws:
   /// - [Exception] with message `⚠️ Failed to move configuration files` on failure.
-  static void moveConfigsToWorkspaceRootSync({
+  void moveConfigsToWorkspaceRootSync({
     required String projectName,
     required Directory initialDirectory,
   }) {
-    print('🚚 Moving configuration files to workspace root...');
+    log('🚚 Moving configuration files to workspace root...');
     final files = ['.gitignore', 'analysis_options.yaml'];
 
     for (final fileName in files) {
       try {
-        final source = File('$projectName/$fileName');
+        final source = fs.file('$projectName/$fileName');
         if (source.existsSync()) {
           source.renameSync(fileName);
-          print('✅ Moved $fileName to workspace root');
+          log('✅ Moved $fileName to workspace root');
         }
       } catch (_) {
         throw Exception('⚠️ Failed to move $fileName');

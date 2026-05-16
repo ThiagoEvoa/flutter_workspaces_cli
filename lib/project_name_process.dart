@@ -4,7 +4,11 @@ import 'package:args/args.dart';
 ///
 /// The CLI expects a required `--name` (`-n`) option that specifies the
 /// project/workspace base name used throughout the scaffolding process.
-abstract class ProjectNameProcess {
+class ProjectNameProcess {
+  final void Function(String) log;
+
+  ProjectNameProcess({this.log = print});
+
   /// Parses [arguments] for the required `--name` option and returns it.
   ///
   /// Parameters:
@@ -15,8 +19,8 @@ abstract class ProjectNameProcess {
   ///
   /// Throws:
   /// - [ArgumentError] when the `--name` option is missing or empty.
-  static String getProjectName({required List<String> arguments}) {
-    print('📝 Getting project name...');
+  String getProjectName({required List<String> arguments}) {
+    log('📝 Getting project name...');
     final parser = ArgParser()
       ..addOption(
         'name',
@@ -30,7 +34,7 @@ abstract class ProjectNameProcess {
     if (name == null || name.isEmpty) {
       throw ArgumentError('The --name parameter is required.');
     }
-    print('✅ Project name: $name');
+    log('✅ Project name: $name');
     return name;
   }
 }

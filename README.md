@@ -6,11 +6,13 @@ A command-line tool for scaffolding and managing monorepo-style Flutter workspac
 
 - ✅ **Workspace Creation**: Automatically creates a `<name>_workspaces` folder and sets up the workspace structure.
 - 📦 **Core Package Scaffolding**: Creates a reusable `packages/core` package for shared code.
+- ➕ **Add Package**: Easily add new packages to your existing workspace with a single command.
 - 📱 **Flutter App Scaffolding**: Generates a main Flutter application that imports and uses the core package.
 - 🎯 **Workspace Resolution**: Configures `pubspec.yaml` files with workspace resolution for monorepo support.
 - 🔍 **Environment Validation**: Checks for Flutter and Dart SDK requirements (Dart 3.6.0+).
 - 📋 **Dependency Management**: Automatically adds common Flutter dependencies (cupertino_icons, flutter_lints, custom_lint).
 - 🧹 **Error Handling**: Reverts workspace creation on failure for clean error states.
+- 🏗️ **SOLID Architecture**: Refactored to use Dependency Injection with `FileSystem` and `ProcessRunner` abstractions for better testability and maintainability.
 
 ## Requirements
 
@@ -26,21 +28,42 @@ dart pub global activate flutter_workspaces_cli
 
 ## Usage
 
+### Create a New Workspace
+
 Run the CLI with the required `--name` argument to create a new workspace:
 
 ```bash
-flutter_workspaces_cli.dart --name my_app
+flutter_workspaces_cli --name my_app
 ```
 
 Or use the short flag:
 
 ```bash
-flutter_workspaces_cli.dart -n my_app
+flutter_workspaces_cli -n my_app
 ```
 
-### What Gets Created
+### Add a New Package
 
-After running the command, the following structure is created:
+To add a new package to an existing workspace, use the `add-package` command from the workspace root:
+
+```bash
+flutter_workspaces_cli add-package --name my_feature
+```
+
+## Project Structure
+
+The project follows a modular service-based structure in `lib/`:
+
+- `bin/`: CLI entry point.
+- `lib/`:
+    - `setup_runner.dart`: Orchestrates the initial workspace setup.
+    - `add_package_runner.dart`: Orchestrates adding new packages.
+    - `process_runner.dart`: Abstraction for executing system processes.
+    - `*_process.dart`: Modular services handling specific parts of the workflow (Dart, Flutter, Workspace, Packages, etc.).
+
+### Generated Workspace Structure
+
+After running the setup command, the following structure is created:
 
 ```
 my_app_workspaces/
@@ -57,34 +80,25 @@ my_app_workspaces/
         └── pubspec.yaml
 ```
 
-The root `pubspec.yaml` includes workspace configuration that allows both the app and core package to be developed together with shared dependency resolution.
-
 ## Command-Line Arguments
+
+### Setup (Default)
 
 | Argument | Short | Required | Description |
 |----------|-------|----------|-------------|
 | `--name` | `-n` | Yes | The base name for your workspace and app (e.g., `my_app`) |
 
-### Example
+### Add Package (`add-package`)
 
-```bash
-flutter_workspaces_cli.dart --name flutter_monorepo
-```
-
-This creates a workspace named `flutter_monorepo_workspaces` with all required structure and dependencies.
+| Argument | Short | Required | Description |
+|----------|-------|----------|-------------|
+| `--name` | `-n` | Yes | The name of the new package to create in `packages/` |
 
 ## Exit Codes
 
 - `0`: Success
 - `1`: General error (execution failed)
 - `64`: Missing or invalid arguments (e.g., `--name` not provided)
-
-## Error Handling
-
-If the CLI encounters an error during workspace creation:
-
-1. **Missing `--name` argument**: Prints usage help and exits with code 64 (no workspace created).
-2. **Other errors**: Reverts the workspace if it was partially created and exits with code 1.
 
 ## Development
 
@@ -96,31 +110,7 @@ Run the test suite to verify all functionality:
 dart test
 ```
 
-The test suite includes:
-- Project name parsing and validation
-- Dart version detection and validation
-- Flutter installation checks
-- Workspace and package file generation
-- Pubspec configuration verification
-
-### Project Structure
-
-```
-lib/
-├── dart_process.dart           # Dart SDK detection & validation
-├── project_name_process.dart   # CLI argument parsing
-├── common_process.dart         # Shared utilities
-├── core_package_process.dart   # Core package scaffolding
-├── flutter_app_process.dart    # Flutter app scaffolding
-├── flutter_process.dart        # Flutter SDK checks
-└── workspace_process.dart      # Workspace creation & config
-
-bin/
-└── flutter_workspaces_cli.dart # Main entry point
-
-test/
-└── flutter_workspaces_cli_test.dart # Test suite
-```
+The test suite leverages the `FileSystem` and `ProcessRunner` abstractions to provide 100% coverage without side effects on your local machine.
 
 ## Contributing
 

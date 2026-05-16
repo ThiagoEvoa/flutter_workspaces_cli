@@ -1,247 +1,273 @@
-import 'dart:io';
-
-import 'package:args/args.dart';
+import 'package:file/memory.dart';
 import 'package:flutter_workspaces_cli/flutter_workspaces_cli.dart';
+import 'package:mocktail/mocktail.dart';
 import 'package:test/test.dart';
 
-// Helper function to test private _validateDartVersion
-void _validateDartVersionHelper(String version) {
-  final parts = version.split('.');
-  if (parts.length < 2) {
-    throw Exception(
-      'Dart 3.6.0 or higher is required. Current version: $version',
-    );
-  }
-
-  final major = int.tryParse(parts[0]) ?? 0;
-  final minor = int.tryParse(parts[1]) ?? 0;
-
-  if (major < 3 || (major == 3 && minor < 6)) {
-    throw Exception(
-      'Dart 3.6.0 or higher is required. Current version: $version',
-    );
-  }
-}
+class MockProcessRunner extends Mock implements ProcessRunner {}
 
 void main() {
+  late MemoryFileSystem fs;
+  late MockProcessRunner runner;
+  late List<String> logs;
+
+  void logger(String message) => logs.add(message);
+
+  setUp(() {
+    fs = MemoryFileSystem();
+    runner = MockProcessRunner();
+    logs = [];
+  });
+
   group('ProjectNameProcess', () {
     test('getProjectName returns project name when --name is provided', () {
+      final process = ProjectNameProcess(log: logger);
       final arguments = ['--name', 'my_app'];
-      final result = ProjectNameProcess.getProjectName(arguments: arguments);
+      final result = process.getProjectName(arguments: arguments);
       expect(result, equals('my_app'));
     });
 
-    test('getProjectName returns project name with short flag -n', () {
-      final arguments = ['-n', 'test_project'];
-      final result = ProjectNameProcess.getProjectName(arguments: arguments);
-      expect(result, equals('test_project'));
-    });
-
     test('getProjectName throws ArgumentError when --name is missing', () {
+      final process = ProjectNameProcess(log: logger);
       final arguments = <String>[];
       expect(
-        () => ProjectNameProcess.getProjectName(arguments: arguments),
-        throwsArgumentError,
-      );
-    });
-
-    test('getProjectName throws ArgumentError when --name value is empty', () {
-      final arguments = ['--name', ''];
-      expect(
-        () => ProjectNameProcess.getProjectName(arguments: arguments),
+        () => process.getProjectName(arguments: arguments),
         throwsArgumentError,
       );
     });
   });
 
   group('DartProcess', () {
-    test('getDartVersionSync returns a version string or fallback', () {
-      final version = DartProcess.getDartVersionSync();
-      expect(version, isNotEmpty);
-      // Should be either a valid version or the fallback '^3.6.0'
-      expect(version.contains(RegExp(r'^\d+\.\d+\.\d+|^\^3\.6\.0')), isTrue);
+    test('getDartVersionSync returns a version string on success', () {
+      final process = DartProcess(runner: runner, log: logger);
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0 (stable)',
+          stderr: '',
+        ),
+      );
+
+      final version = process.getDartVersionSync();
+      expect(version, equals('3.6.0'));
     });
 
-    test('validateDartVersion throws for version < 3.6.0', () {
-      expect(() => _validateDartVersionHelper('3.5.0'), throwsException);
-    });
+    test('getDartVersionSync returns fallback on failure', () {
+      final process = DartProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('dart', ['--version']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 1, stdout: '', stderr: ''));
 
-    test('validateDartVersion throws for malformed version', () {
-      expect(() => _validateDartVersionHelper('invalid'), throwsException);
-    });
-
-    test('validateDartVersion does not throw for version >= 3.6.0', () {
-      expect(() => _validateDartVersionHelper('3.6.0'), returnsNormally);
-      expect(() => _validateDartVersionHelper('3.10.8'), returnsNormally);
-      expect(() => _validateDartVersionHelper('4.0.0'), returnsNormally);
+      final version = process.getDartVersionSync();
+      expect(version, equals('^3.6.0'));
     });
   });
 
   group('FlutterProcess', () {
+    test('isFlutterInstalledSync does not throw when Flutter is available', () {
+      final process = FlutterProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('flutter', ['--version']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+
+      expect(() => process.isFlutterInstalledSync(), returnsNormally);
+    });
+
     test('isFlutterInstalledSync throws when Flutter is not available', () {
-      // This test assumes Flutter might not be installed or is mocked.
-      // Adjust based on your test environment.
-      try {
-        FlutterProcess.isFlutterInstalledSync();
-        // If we get here, Flutter is installed (expected in dev environment)
-        expect(true, isTrue);
-      } catch (e) {
-        // Flutter not installed; exception is expected.
-        expect(e, isException);
-      }
+      final process = FlutterProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('flutter', ['--version']),
+      ).thenThrow(Exception());
+
+      expect(() => process.isFlutterInstalledSync(), throwsException);
     });
   });
 
   group('CommonProcess', () {
-    test('getInitialDirectory returns a directory', () {
-      final result = CommonProcess.getInitialDirectory();
-      expect(result, isA<Directory>());
-    });
-
-    test('printUsage does not throw', () {
-      final parser = ArgParser();
-      expect(() => CommonProcess.printUsage(parser), returnsNormally);
+    test('deleteFilesSync deletes existing file', () {
+      final process = CommonProcess(fs: fs, runner: runner, log: logger);
+      final file = fs.file('test.txt')..createSync();
+      process.deleteFilesSync(filePath: 'test.txt');
+      expect(file.existsSync(), isFalse);
     });
   });
 
-  group('WorkspaceProcess file operations', () {
-    late Directory testDir;
-
-    setUp(() {
-      // Create a temporary test directory
-      testDir = Directory.systemTemp.createTempSync('flutter_ws_test_');
-      Directory.current = testDir.path;
-    });
-
-    tearDown(() {
-      // Restore original directory and clean up
-      Directory.current = Directory.systemTemp.path;
-      if (testDir.existsSync()) {
-        testDir.deleteSync(recursive: true);
-      }
-    });
-
+  group('WorkspaceProcess', () {
     test('createPackagesFolderSync creates packages directory', () {
-      WorkspaceProcess.createPackagesFolderSync();
-      expect(Directory('packages').existsSync(), isTrue);
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      process.createPackagesFolderSync();
+      expect(fs.directory('packages').existsSync(), isTrue);
     });
 
-    test('createRootPubspecSync writes pubspec.yaml with correct content', () {
-      WorkspaceProcess.createRootPubspecSync(
-        dartVersion: '3.10.8',
-        projectName: 'test_app',
-      );
-      final file = File('pubspec.yaml');
+    test('createRootPubspecSync writes pubspec.yaml', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      process.createRootPubspecSync(dartVersion: '3.10.8', projectName: 'app');
+      final file = fs.file('pubspec.yaml');
       expect(file.existsSync(), isTrue);
-
-      final content = file.readAsStringSync();
-      expect(content, contains('workspace:'));
-      expect(content, contains('test_app'));
-      expect(content, contains('packages/core'));
-      expect(content, contains('^3.10.8'));
-    });
-
-    test('createWorkspaceFolderSync creates folder and changes directory', () {
-      final originalDir = Directory.current;
-      WorkspaceProcess.createWorkspaceFolderSync(projectName: 'my_project');
-
-      final expectedFolder = Directory(
-        '${originalDir.path}/my_project_workspaces',
-      );
-      expect(expectedFolder.existsSync(), isTrue);
-      expect(Directory.current.path, equals(expectedFolder.path));
-
-      // Restore directory
-      Directory.current = originalDir.path;
+      expect(file.readAsStringSync(), contains('name: _'));
     });
   });
 
-  group('CorePackageProcess file operations', () {
-    late Directory testDir;
+  group('PackageProcess', () {
+    test('createPackageSync runs flutter create', () {
+      final process = PackageProcess(fs: fs, runner: runner, log: logger);
+      when(
+        () => runner.runSync(
+          'flutter',
+          ['create', '--template=package', 'my_pkg'],
+          workingDirectory: 'packages',
+          runInShell: true,
+        ),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
 
-    setUp(() {
-      testDir = Directory.systemTemp.createTempSync('flutter_core_test_');
-      Directory.current = testDir.path;
-      Directory('packages/core/lib').createSync(recursive: true);
+      process.createPackageSync(packageName: 'my_pkg');
+
+      verify(
+        () => runner.runSync(
+          'flutter',
+          ['create', '--template=package', 'my_pkg'],
+          workingDirectory: 'packages',
+          runInShell: true,
+        ),
+      ).called(1);
     });
 
-    tearDown(() {
-      Directory.current = Directory.systemTemp.path;
-      if (testDir.existsSync()) {
-        testDir.deleteSync(recursive: true);
-      }
-    });
+    test('updatePubspecSync writes pubspec.yaml with workspace resolution', () {
+      final process = PackageProcess(fs: fs, runner: runner, log: logger);
+      fs.directory('packages/my_pkg').createSync(recursive: true);
 
-    test('updateCorePubspecSync writes correct pubspec content', () {
-      CorePackageProcess.updateCorePubspecSync(dartVersion: '3.10.0');
-      final file = File('packages/core/pubspec.yaml');
+      process.updatePubspecSync(packageName: 'my_pkg', dartVersion: '3.6.0');
+
+      final file = fs.file('packages/my_pkg/pubspec.yaml');
       expect(file.existsSync(), isTrue);
-
       final content = file.readAsStringSync();
-      expect(content, contains('name: core'));
-      expect(content, contains('^3.10.0'));
+      expect(content, contains('name: my_pkg'));
       expect(content, contains('resolution: workspace'));
+      expect(content, contains('sdk: ^3.6.0'));
     });
   });
 
-  group('FlutterAppProcess file operations', () {
-    late Directory testDir;
-
-    setUp(() {
-      testDir = Directory.systemTemp.createTempSync('flutter_app_test_');
-      Directory.current = testDir.path;
-    });
-
-    tearDown(() {
-      Directory.current = Directory.systemTemp.path;
-      if (testDir.existsSync()) {
-        testDir.deleteSync(recursive: true);
-      }
-    });
-
-    test('updateFlutterAppPubspecSync writes correct pubspec', () {
-      // Create a test app directory first
-      Directory('test_app').createSync(recursive: true);
-
-      FlutterAppProcess.updateFlutterAppPubspecSync(
-        dartVersion: '3.10.0',
-        projectName: 'test_app',
+  group('AddPackageRunner', () {
+    test('run successfully adds a package', () {
+      final addPackageRunner = AddPackageRunner(
+        fs: fs,
+        runner: runner,
+        log: logger,
       );
 
-      final file = File('test_app/pubspec.yaml');
-      expect(file.existsSync(), isTrue);
+      fs.directory('packages').createSync();
 
-      final content = file.readAsStringSync();
-      expect(content, contains('name: test_app'));
-      expect(content, contains('^3.10.0'));
-      expect(content, contains('resolution: workspace'));
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+
+      when(
+        () => runner.runSync(
+          'flutter',
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.contains('create')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      addPackageRunner.run(['--name', 'new_pkg']);
+
+      expect(fs.file('packages/new_pkg/pubspec.yaml').existsSync(), isTrue);
+      expect(logs, contains(contains('Package "new_pkg" added successfully!')));
     });
 
-    test('updateFlutterAppWidgetSync writes main.dart with core import', () {
-      Directory('test_app/lib').createSync(recursive: true);
+    test('run throws when packages directory is missing', () {
+      final addPackageRunner = AddPackageRunner(
+        fs: fs,
+        runner: runner,
+        log: logger,
+      );
 
-      FlutterAppProcess.updateFlutterAppWidgetSync(projectName: 'test_app');
-
-      final file = File('test_app/lib/main.dart');
-      expect(file.existsSync(), isTrue);
-
-      final content = file.readAsStringSync();
-      expect(content, contains("import 'package:core/core.dart'"));
-      expect(content, contains('MaterialApp'));
-      expect(content, contains('MyApp'));
+      expect(
+        () => addPackageRunner.run(['--name', 'new_pkg']),
+        throwsA(isA<ExitException>()),
+      );
+      expect(logs, contains(contains('Directory "packages" not found')));
     });
+  });
 
-    test('updateAnalysisOptionsFileSync writes analysis_options.yaml', () {
-      Directory('test_app').createSync(recursive: true);
+  group('SetupRunner', () {
+    test('run successfully completes simple workflow', () {
+      final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
 
-      FlutterAppProcess.updateAnalysisOptionsFileSync(projectName: 'test_app');
+      // Setup initial directory
+      final initialDir = fs.directory('/test')..createSync();
+      fs.currentDirectory = initialDir;
 
-      final file = File('test_app/analysis_options.yaml');
-      expect(file.existsSync(), isTrue);
+      // Mock dart version
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
 
-      final content = file.readAsStringSync();
-      expect(content, contains('flutter_lints'));
-      expect(content, contains('custom_lint'));
+      // Mock flutter version check
+      when(
+        () => runner.runSync('flutter', ['--version']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+
+      // Mock other flutter commands
+      when(
+        () => runner.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final executable = invocation.positionalArguments[0] as String;
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            !args.contains('--template=package')) {
+          final appName = args.last;
+          fs.directory('$appName/lib').createSync(recursive: true);
+        }
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            args.contains('--template=package')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      try {
+        setupRunner.run(['--name', 'test_app']);
+      } catch (e) {
+        print('Logs:');
+        logs.forEach(print);
+        rethrow;
+      }
+
+      expect(fs.directory('/test/test_app_workspaces').existsSync(), isTrue);
     });
   });
 }

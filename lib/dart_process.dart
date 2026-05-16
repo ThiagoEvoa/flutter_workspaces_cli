@@ -1,10 +1,18 @@
-import 'dart:io';
+import 'process_runner.dart';
 
 /// Utilities for querying and validating the installed Dart SDK.
 ///
 /// Provides synchronous helpers used by the CLI to detect the locally
 /// installed Dart SDK version and to enforce a minimum required SDK.
-abstract class DartProcess {
+class DartProcess {
+  final ProcessRunner runner;
+  final void Function(String) log;
+
+  DartProcess({
+    required this.runner,
+    this.log = print,
+  });
+
   /// Returns the installed Dart SDK version string or a sensible fallback.
   ///
   /// Runs `dart --version` and parses the output to extract a semantic
@@ -16,12 +24,12 @@ abstract class DartProcess {
   ///
   /// Throws:
   /// - [Exception] when a version is detected but is lower than 3.6.0.
-  static String getDartVersionSync() {
+  String getDartVersionSync() {
     const minimumVersion = '^3.6.0';
 
     try {
-      print('🔍 Checking Dart version...');
-      final result = Process.runSync('dart', ['--version']);
+      log('🔍 Checking Dart version...');
+      final result = runner.runSync('dart', ['--version']);
       if (result.exitCode != 0) return minimumVersion;
       final out = '${result.stdout}\n${result.stderr}';
 
@@ -38,11 +46,11 @@ abstract class DartProcess {
       if (match != null) {
         final version = match.group(1)!;
         _validateDartVersion(version);
-        print('✅ Dart version: $version');
+        log('✅ Dart version: $version');
         return version;
       }
 
-      print('✅ Dart version: $minimumVersion');
+      log('✅ Dart version: $minimumVersion');
       return minimumVersion;
     } catch (_) {
       return minimumVersion;
@@ -56,7 +64,7 @@ abstract class DartProcess {
   ///
   /// Throws:
   /// - [Exception] when the value is malformed or numerically less than 3.6.0.
-  static void _validateDartVersion(String version) {
+  void _validateDartVersion(String version) {
     final parts = version.split('.');
     if (parts.length < 2) {
       throw Exception(
