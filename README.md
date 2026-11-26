@@ -123,7 +123,7 @@ The test suite leverages the `FileSystem` and `ProcessRunner` abstractions to ex
 
 #### Dependency resolution
 
-The package supports Dart `>= 3.11.5` (per `pubspec.yaml` `environment.sdk`). The committed `pubspec.lock` is the resolution contract: CI installs the floor SDK (`3.11.5`) and the current stable (`3.14.0`) and resolves with `dart pub get --enforce-lockfile`, so the committed lockfile is expected to resolve at the floor — CI enforces it. If `--enforce-lockfile` fails locally, run `dart pub get`, review the change, and commit the updated lockfile along with your PR.
+The package supports Dart `>= 3.11.5` (per `pubspec.yaml` `environment.sdk`). The committed `pubspec.lock` is the resolution contract: CI installs both the floor SDK (`3.11.5`) and the current stable (`3.14.0`) and resolves the CLI's own dependencies with `dart pub get --enforce-lockfile` (in both the check and smoke jobs), so the committed lockfile is expected to resolve at the floor — CI enforces it. The generated workspace does not share this lockfile: it is resolved with a plain `flutter pub get` against its own generated `pubspec.lock`. If `--enforce-lockfile` fails locally, run `dart pub get`, review the change, and commit the updated lockfile along with your PR.
 
 #### Local smoke replication
 

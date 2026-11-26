@@ -12,6 +12,7 @@ jobs:
   check:
     name: Check (Dart ${{ matrix.dart-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -22,7 +23,7 @@ jobs:
       - name: Set up Dart
         uses: dart-lang/setup-dart@v1
         with:
-          dart-version: ${{ matrix.dart-version }}
+          sdk: ${{ matrix.dart-version }}
 
       - name: Install dependencies (locked)
         run: dart pub get --enforce-lockfile
@@ -40,6 +41,7 @@ jobs:
     name: Smoke (${{ matrix.os }})
     needs: check
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +63,7 @@ jobs:
           channel: stable
 
       - name: Resolve CLI dependencies
-        run: dart pub get
+        run: dart pub get --enforce-lockfile
 
       - name: Create smoke temp directory
         run: mkdir "${{ runner.temp }}/scaffold-smoke"

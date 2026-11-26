@@ -49,7 +49,10 @@ void main() {
     test('getDartVersionSync returns a version string on success', () {
       final process = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -66,7 +69,10 @@ void main() {
     test('getDartVersionSync throws on failed detection (nonzero exit)', () {
       final process = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 1, stdout: '', stderr: ''));
 
       expect(
@@ -83,7 +89,10 @@ void main() {
       // `dart` binary on PATH (e.g. one reporting 3.14.0).
       final dart = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -116,7 +125,10 @@ void main() {
       () {
         final dart = DartProcess(runner: runner, log: logger);
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
@@ -126,7 +138,9 @@ void main() {
           ),
         );
         // A text output that would report a different version must not win.
-        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
             stdout: 'Dart SDK version: 3.14.0',
@@ -143,7 +157,10 @@ void main() {
       () {
         final dart = DartProcess(runner: runner, log: logger);
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
@@ -151,7 +168,9 @@ void main() {
             stderr: '',
           ),
         );
-        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
             stdout: 'Dart SDK version: 3.10.8 (stable)',
@@ -168,7 +187,10 @@ void main() {
       () {
         final dart = DartProcess(runner: runner, log: logger);
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
@@ -177,7 +199,9 @@ void main() {
             stderr: '',
           ),
         );
-        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
+        ).thenReturn(
           ProcessRunnerResult(exitCode: 0, stdout: 'Dart 3.10.8', stderr: ''),
         );
 
@@ -190,11 +214,16 @@ void main() {
       () {
         final dart = DartProcess(runner: runner, log: logger);
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''),
         );
-        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
             stdout: 'Flutter is busy',
@@ -218,11 +247,16 @@ void main() {
     test('malformed machine JSON and unparseable text → actionable throw', () {
       final dart = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(exitCode: 0, stdout: 'not json at all', stderr: ''),
       );
-      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(
         ProcessRunnerResult(exitCode: 0, stdout: 'no version here', stderr: ''),
       );
 
@@ -241,7 +275,10 @@ void main() {
     test('machine output cannot be started → actionable throw', () {
       final dart = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenThrow(Exception('no such executable'));
 
       expect(
@@ -261,7 +298,10 @@ void main() {
       () {
         final dart = DartProcess(runner: runner, log: logger);
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
@@ -289,11 +329,16 @@ void main() {
       () {
         final dart = DartProcess(runner: runner, log: logger);
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''),
         );
-        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
             stdout: 'Dart SDK version: 3.5.0',
@@ -317,9 +362,14 @@ void main() {
     test('malformed version (3.x) in text output → actionable throw', () {
       final dart = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''));
-      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
           stdout: 'Dart SDK version: 3.x',
@@ -342,7 +392,10 @@ void main() {
     test('prerelease machine version (3.8.0-dev.0) → actionable throw', () {
       final dart = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -352,7 +405,9 @@ void main() {
         ),
       );
       // The text parse must also reject the prerelease token.
-      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
           stdout: 'Dart SDK version: 3.8.0-dev.0',
@@ -366,9 +421,14 @@ void main() {
     test('prerelease text version (3.11.0-beta.1) → actionable throw', () {
       final dart = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''));
-      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
           stdout: 'Dart SDK version: 3.11.0-beta.1',
@@ -382,7 +442,10 @@ void main() {
     test('machine output tolerates other plausible Dart version fields', () {
       final dart = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -402,12 +465,17 @@ void main() {
       fs.currentDirectory = initialDir;
 
       when(
-        () => runner.runSync('flutter', ['--version']),
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''));
-      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(
         ProcessRunnerResult(exitCode: 0, stdout: 'no version here', stderr: ''),
       );
 
@@ -432,11 +500,16 @@ void main() {
         fs.directory('packages').createSync();
 
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''),
         );
-        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
             stdout: 'no version here',
@@ -537,7 +610,7 @@ void main() {
     test('isFlutterInstalledSync does not throw when Flutter is available', () {
       final process = FlutterProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version']),
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
 
       expect(() => process.isFlutterInstalledSync(), returnsNormally);
@@ -546,7 +619,7 @@ void main() {
     test('isFlutterInstalledSync throws when Flutter is not available', () {
       final process = FlutterProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('flutter', ['--version']),
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
       ).thenThrow(Exception());
 
       expect(() => process.isFlutterInstalledSync(), throwsException);
@@ -752,7 +825,10 @@ workspace:
     // "packages" directory) shared by most Issue #13 tests.
     void stubSuccessfulFlutter() {
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -862,7 +938,10 @@ workspace:
       fs.directory('packages').createSync();
 
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -921,7 +1000,10 @@ workspace:
       fs.directory('packages').createSync();
 
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1062,7 +1144,10 @@ workspace:
       fs.directory('packages').createSync();
 
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1189,7 +1274,10 @@ workspace:
       when(() => lockFile.existsSync()).thenReturn(false);
 
       when(
-        () => runner2.runSync('flutter', ['--version', '--machine']),
+        () => runner2.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1285,7 +1373,10 @@ workspace:
       });
 
       when(
-        () => runner2.runSync('flutter', ['--version', '--machine']),
+        () => runner2.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1342,7 +1433,10 @@ workspace:
       fs.directory('packages').createSync();
 
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1445,7 +1539,10 @@ workspace:
       fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
 
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1529,7 +1626,10 @@ workspace:
 
       // Mock dart version
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1541,7 +1641,7 @@ workspace:
 
       // Mock flutter version check
       when(
-        () => runner.runSync('flutter', ['--version']),
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
 
       // Mock other flutter commands
@@ -1678,7 +1778,12 @@ workspace:
 
       // No Flutter/Dart process was invoked for the rejected attempt.
       verifyNever(() => runner.runSync('flutter', any()));
-      verifyNever(() => runner.runSync('flutter', ['--version', '--machine']));
+      verifyNever(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      );
       expect(logs, contains(contains('already exists')));
     });
 
@@ -1693,10 +1798,13 @@ workspace:
       fs.file('/work/keep_me.txt').createSync();
 
       when(
-        () => runner.runSync('flutter', ['--version']),
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1771,10 +1879,13 @@ workspace:
       ).thenThrow(Exception('cannot delete reserved directory'));
 
       when(
-        () => runner2.runSync('flutter', ['--version']),
+        () => runner2.runSync('flutter', ['--version'], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
       when(
-        () => runner2.runSync('flutter', ['--version', '--machine']),
+        () => runner2.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1817,10 +1928,13 @@ workspace:
       final logs1 = <String>[];
 
       when(
-        () => runner1.runSync('flutter', ['--version']),
+        () => runner1.runSync('flutter', ['--version'], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
       when(
-        () => runner1.runSync('flutter', ['--version', '--machine']),
+        () => runner1.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -1908,7 +2022,12 @@ workspace:
         isTrue,
       );
       verifyNever(() => runner2.runSync('flutter', any()));
-      verifyNever(() => runner2.runSync('flutter', ['--version', '--machine']));
+      verifyNever(
+        () => runner2.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      );
     });
 
     test('(e) a successful setup restores the working directory to the '
@@ -1919,10 +2038,13 @@ workspace:
       fs.currentDirectory = initialDir;
 
       when(
-        () => runner.runSync('flutter', ['--version']),
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
@@ -2011,7 +2133,12 @@ workspace:
 
       // No Flutter/Dart process was invoked for the rejected attempt.
       verifyNever(() => runner.runSync('flutter', any()));
-      verifyNever(() => runner.runSync('flutter', ['--version', '--machine']));
+      verifyNever(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      );
       expect(logs, contains(contains('already exists')));
     });
 
@@ -2036,7 +2163,12 @@ workspace:
 
       // No Flutter/Dart process was invoked for the rejected attempt.
       verifyNever(() => runner.runSync('flutter', any()));
-      verifyNever(() => runner.runSync('flutter', ['--version', '--machine']));
+      verifyNever(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      );
       expect(logs, contains(contains('already exists')));
     });
   });
@@ -2053,7 +2185,9 @@ workspace:
         final initialDir = fs.directory('/work')..createSync();
         fs.currentDirectory = initialDir;
 
-        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 1,
             stdout: 'flutter failed to start',
@@ -2075,7 +2209,10 @@ workspace:
         // Downstream steps and the success message were skipped.
         expect(logs, isNot(contains(contains('completed successfully'))));
         verifyNever(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         );
         verifyNever(
           () => runner.runSync('flutter', [
@@ -2095,7 +2232,7 @@ workspace:
         final process = FlutterProcess(runner: runner, log: logger);
 
         when(
-          () => runner.runSync('flutter', ['--version']),
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
         ).thenThrow(Exception('no such executable'));
 
         try {
@@ -2195,10 +2332,13 @@ workspace:
         fs.currentDirectory = initialDir;
 
         when(
-          () => runner.runSync('flutter', ['--version']),
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
         ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
@@ -2393,7 +2533,10 @@ workspace:
             .writeAsStringSync('workspace:\n  - app\n  - packages/core');
 
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
@@ -2474,7 +2617,10 @@ workspace:
         fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - app');
 
         when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
+          () => runner.runSync('flutter', [
+            '--version',
+            '--machine',
+          ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
@@ -2521,10 +2667,13 @@ workspace:
       fs.currentDirectory = initialDir;
 
       when(
-        () => runner.runSync('flutter', ['--version']),
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
       when(
-        () => runner.runSync('flutter', ['--version', '--machine']),
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
