@@ -43,7 +43,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            shell: bash
+          - os: windows-latest
+            shell: pwsh
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,45 +64,36 @@ jobs:
         run: dart pub get
 
       - name: Create smoke temp directory
-        shell: bash
-        run: mkdir -p "${{ runner.temp }}/scaffold-smoke"
+        run: mkdir "${{ runner.temp }}/scaffold-smoke"
 
       - name: Scaffold workspace (CLI setup)
-        shell: bash
         working-directory: ${{ runner.temp }}/scaffold-smoke
         run: dart run "${{ github.workspace }}/bin/flutter_workspaces_cli.dart" setup --name scaffold_smoke
 
       - name: Resolve dependencies (generated workspace)
-        shell: bash
         working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces
         run: flutter pub get
 
       - name: Analyze (generated workspace)
-        shell: bash
         working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces
         run: flutter analyze
 
       - name: Test (generated app)
-        shell: bash
         working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces/scaffold_smoke
         run: flutter test
 
       - name: Test (core package)
-        shell: bash
         working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces/packages/core
         run: flutter test
 
       - name: Add package (CLI add-package)
-        shell: bash
         working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces
         run: dart run "${{ github.workspace }}/bin/flutter_workspaces_cli.dart" add-package --name smoke_feature
 
       - name: Resolve dependencies (after add-package)
-        shell: bash
         working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces
         run: flutter pub get
 
       - name: Test (smoke_feature package)
-        shell: bash
         working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces/packages/smoke_feature
         run: flutter test
