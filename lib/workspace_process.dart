@@ -115,50 +115,84 @@ dev_dependencies:
   /// Adds common runtime Flutter dependencies to the workspace pubspec.
   ///
   /// Throws:
-  /// - [Exception] with message `⚠️ Failed to add Flutter dependencies` on failure.
+  /// - [SubprocessException] when the `flutter pub add` command exits with a
+  ///   non-zero status (message includes the operation, exit status, and
+  ///   Flutter output).
+  /// - [Exception] when the `flutter` command cannot be started.
   void addingFlutterDependenciesSync() {
     try {
       log('📦 Adding Flutter dependencies...');
-      runner.runSync('flutter', [
+      final result = runner.runSync('flutter', [
         'pub',
         'add',
         'cupertino_icons',
       ], runInShell: true);
+      checkProcessResult(
+        result: result,
+        operation: 'flutter pub add cupertino_icons',
+      );
       log('✅ Flutter dependencies added');
-    } catch (_) {
-      throw Exception('⚠️ Failed to add Flutter dependencies');
+    } catch (e) {
+      if (e is SubprocessException) rethrow;
+      throw Exception(
+        '⚠️ Failed to add Flutter dependencies: '
+        'flutter pub add cupertino_icons could not be started '
+        '(missing executable?)',
+      );
     }
   }
 
   /// Adds development dependencies (linting) to the workspace pubspec.
   ///
   /// Throws:
-  /// - [Exception] with message `⚠️ Failed to add Flutter dev dependencies` on failure.
+  /// - [SubprocessException] when the `flutter pub add` command exits with a
+  ///   non-zero status (message includes the operation, exit status, and
+  ///   Flutter output).
+  /// - [Exception] when the `flutter` command cannot be started.
   void addingFlutterDevDependenciesSync() {
     try {
       log('📦 Adding Flutter dev dependencies...');
-      runner.runSync('flutter', [
+      final result = runner.runSync('flutter', [
         'pub',
         'add',
         '--dev',
         'flutter_lints',
         'custom_lint',
       ], runInShell: true);
+      checkProcessResult(
+        result: result,
+        operation: 'flutter pub add --dev flutter_lints custom_lint',
+      );
       log('✅ Flutter dev dependencies added');
-    } catch (_) {
-      throw Exception('⚠️ Failed to add Flutter dev dependencies');
+    } catch (e) {
+      if (e is SubprocessException) rethrow;
+      throw Exception(
+        '⚠️ Failed to add Flutter dev dependencies: '
+        'flutter pub add --dev flutter_lints custom_lint could not be started '
+        '(missing executable?)',
+      );
     }
   }
 
   /// Runs `flutter pub get` at the current working directory to resolve dependencies.
   ///
   /// Throws:
-  /// - [Exception] with message `⚠️ Failed to run Flutter pub get` on failure.
+  /// - [SubprocessException] when `flutter pub get` exits with a non-zero
+  ///   status (message includes the operation, exit status, and Flutter output).
+  /// - [Exception] when the `flutter` command cannot be started.
   void runningFlutterPubGetSync() {
     try {
-      runner.runSync('flutter', ['pub', 'get'], runInShell: true);
-    } catch (_) {
-      throw Exception('⚠️ Failed to run Flutter pub get');
+      final result = runner.runSync('flutter', [
+        'pub',
+        'get',
+      ], runInShell: true);
+      checkProcessResult(result: result, operation: 'flutter pub get');
+    } catch (e) {
+      if (e is SubprocessException) rethrow;
+      throw Exception(
+        '⚠️ Failed to run Flutter pub get: '
+        'flutter pub get could not be started (missing executable?)',
+      );
     }
   }
 

@@ -54,3 +54,67 @@ class RealProcessRunner implements ProcessRunner {
     );
   }
 }
+
+/// Error thrown when a subprocess invocation fails.
+///
+/// Carries the failed [operation] label (e.g. `flutter create my_app`), the
+/// [exitCode] returned by the process (`null` when the process could not be
+/// started at all), and the relevant process [output] captured from the failed
+/// invocation. The [toString] message includes all of these so the error is
+/// useful on its own.
+class SubprocessException implements Exception {
+  /// Human-readable label of the operation that failed.
+  final String operation;
+
+  /// Exit code returned by the process, or `null` when the process could not
+  /// be started (e.g. the executable is missing).
+  final int? exitCode;
+
+  /// Relevant process output (captured stdout and/or stderr) from the failed
+  /// invocation.
+  final String output;
+
+  const SubprocessException({
+    required this.operation,
+    this.exitCode,
+    this.output = '',
+  });
+
+  @override
+  String toString() {
+    if (exitCode == null) {
+      return '$operation could not be started (missing executable?)';
+    }
+    final trimmed = output.trim();
+    final detail = trimmed.isEmpty ? '' : '\n$trimmed';
+    return '$operation failed with exit code $exitCode$detail';
+  }
+}
+
+/// Throws a descriptive [SubprocessException] when [result] reports a non-zero
+/// exit code.
+///
+/// The thrown message includes the failed [operation] label, the exit status,
+/// and the relevant captured Flutter output (stdout and/or stderr). A [result]
+/// with exit code `0` means the step succeeded; this helper returns normally.
+///
+/// This is the shared result check for Flutter subprocesses used by the CLI's
+/// Flutter/Dart helpers. Process-start failures (missing executable) are
+/// handled separately by the call sites, which throw a missing-executable
+/// message instead.
+void checkProcessResult({
+  required ProcessRunnerResult result,
+  required String operation,
+}) {
+  if (result.exitCode == 0) return;
+
+  final stdout = result.stdout?.toString().trim() ?? '';
+  final stderr = result.stderr?.toString().trim() ?? '';
+  final output = [stdout, stderr].where((s) => s.isNotEmpty).join('\n');
+
+  throw SubprocessException(
+    operation: operation,
+    exitCode: result.exitCode,
+    output: output,
+  );
+}
