@@ -54,13 +54,19 @@ class AddPackageRunner {
           '${fs.currentDirectory.path}. Are you in a workspace root?',
         );
       }
-      final hasWorkspaceSection = rootContent
-          .split('\n')
-          .any((line) => line.trim() == 'workspace:');
-      if (!hasWorkspaceSection) {
+      // Use the same shared validator as updateRootPubspecSync so both the
+      // add-package flow and the workspace update flow fail identically on
+      // missing/malformed/wrong-type workspace fields.
+      try {
+        parseWorkspaceManifest(
+          rootContent,
+          expectedRootPath: fs.currentDirectory.path,
+        );
+      } catch (e) {
+        final reason = e.toString().replaceFirst('⚠️ ', '');
         throw Exception(
           '⚠️ Workspace root not found: "pubspec.yaml" in '
-          '${fs.currentDirectory.path} has no "workspace:" section. '
+          '${fs.currentDirectory.path} $reason '
           'Are you in a workspace root?',
         );
       }
