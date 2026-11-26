@@ -7,25 +7,36 @@ class PackageProcess {
   final ProcessRunner runner;
   final void Function(String) log;
 
-  PackageProcess({
-    required this.fs,
-    required this.runner,
-    this.log = print,
-  });
+  PackageProcess({required this.fs, required this.runner, this.log = print});
 
   /// Creates a package in `packages/` by running the Flutter package template.
+  ///
+  /// Throws:
+  /// - [SubprocessException] when the `flutter create` command exits with a
+  ///   non-zero status (message includes the operation, exit status, and
+  ///   Flutter output).
+  /// - [Exception] when the `flutter` command cannot be started.
   void createPackageSync({required String packageName}) {
     try {
       log('📦 Creating $packageName package...');
-      runner.runSync(
+      final result = runner.runSync(
         'flutter',
         ['create', '--template=package', packageName],
         workingDirectory: 'packages',
         runInShell: true,
       );
+      checkProcessResult(
+        result: result,
+        operation: 'flutter create --template=package $packageName',
+      );
       log('✅ $packageName package created');
-    } catch (_) {
-      throw Exception('⚠️ Failed to create $packageName package');
+    } catch (e) {
+      if (e is SubprocessException) rethrow;
+      throw Exception(
+        '⚠️ Failed to create $packageName package: '
+        'flutter create --template=package $packageName could not be started '
+        '(missing executable?): $e',
+      );
     }
   }
 
@@ -35,7 +46,8 @@ class PackageProcess {
     required String dartVersion,
   }) {
     log('📝 Updating $packageName pubspec.yaml...');
-    final content = '''
+    final content =
+        '''
 name: $packageName
 description: "A new Flutter package project."
 version: 0.0.1

@@ -11,11 +11,7 @@ class FlutterAppProcess {
   final ProcessRunner runner;
   final void Function(String) log;
 
-  FlutterAppProcess({
-    required this.fs,
-    required this.runner,
-    this.log = print,
-  });
+  FlutterAppProcess({required this.fs, required this.runner, this.log = print});
 
   /// Scaffolds a new Flutter app by running `flutter create <projectName>`.
   ///
@@ -23,19 +19,30 @@ class FlutterAppProcess {
   /// - `projectName`: the folder/name of the Flutter application to create.
   ///
   /// Throws:
-  /// - [Exception] when the `flutter create` command fails.
+  /// - [SubprocessException] when the `flutter create` command exits with a
+  ///   non-zero status (message includes the operation, exit status, and Flutter
+  ///   output).
+  /// - [Exception] when the `flutter` command cannot be started.
   void createFlutterAppSync({required String projectName}) {
     try {
       log('📱 Creating Flutter app...');
-      runner.runSync(
+      final result = runner.runSync(
         'flutter',
         ['create', projectName],
         workingDirectory: fs.currentDirectory.path,
         runInShell: true,
       );
+      checkProcessResult(
+        result: result,
+        operation: 'flutter create $projectName',
+      );
       log('✅ Flutter app created: $projectName');
-    } catch (_) {
-      throw Exception('Failed to create Flutter app');
+    } catch (e) {
+      if (e is SubprocessException) rethrow;
+      throw Exception(
+        'Failed to create Flutter app: flutter create $projectName could not be '
+        'started (missing executable?): $e',
+      );
     }
   }
 
@@ -114,7 +121,8 @@ class _MyHomePageState extends State<MyHomePage> {
     required String projectName,
   }) {
     log('📝 Updating Flutter app pubspec.yaml...');
-    final content = '''
+    final content =
+        '''
 name: $projectName
 description: "A new Flutter project."
 publish_to: 'none'

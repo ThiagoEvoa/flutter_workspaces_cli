@@ -743,4 +743,645 @@ workspace:
       expect(logs, contains(contains('already exists')));
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Issue #12: fail CLI commands when Flutter subprocesses exit unsuccessfully.
+  // ---------------------------------------------------------------------------
+  group('Issue #12: fail on Flutter subprocess errors', () {
+    test(
+      'Flutter version check exits nonzero: downstream steps and success are skipped',
+      () {
+        final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+
+        final initialDir = fs.directory('/work')..createSync();
+        fs.currentDirectory = initialDir;
+
+        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 1,
+            stdout: 'flutter failed to start',
+            stderr: 'panic: no flutter',
+          ),
+        );
+
+        expect(
+          () => setupRunner.run(['--name', 'my_app']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // The error message includes the failed operation, exit status, and
+        // relevant Flutter output.
+        expect(logs, contains(contains('flutter --version')));
+        expect(logs, contains(contains('exit code 1')));
+        expect(logs, contains(contains('flutter failed to start')));
+
+        // Downstream steps and the success message were skipped.
+        expect(logs, isNot(contains(contains('completed successfully'))));
+        verifyNever(() => runner.runSync('dart', any()));
+        verifyNever(
+          () => runner.runSync('flutter', [
+            'pub',
+            'get',
+          ], runInShell: any(named: 'runInShell')),
+        );
+
+        // The reserved workspace is cleaned up.
+        expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'flutter version check process-start failure gives a clear message',
+      () {
+        final process = FlutterProcess(runner: runner, log: logger);
+
+        when(
+          () => runner.runSync('flutter', ['--version']),
+        ).thenThrow(Exception('no such executable'));
+
+        try {
+          process.isFlutterInstalledSync();
+          fail('expected isFlutterInstalledSync to throw');
+        } catch (e) {
+          expect(e.toString(), contains('Flutter is not installed'));
+        }
+      },
+    );
+
+    test(
+      'createFlutterAppSync exits nonzero: message includes operation, exit status, and output',
+      () {
+        final process = FlutterAppProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync(
+            'flutter',
+            ['create', 'my_app'],
+            workingDirectory: any(named: 'workingDirectory'),
+            runInShell: any(named: 'runInShell'),
+          ),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 3,
+            stdout: 'create failed',
+            stderr: 'boom',
+          ),
+        );
+
+        try {
+          process.createFlutterAppSync(projectName: 'my_app');
+          fail('expected createFlutterAppSync to throw');
+        } catch (e) {
+          expect(e, isA<SubprocessException>());
+          expect(e.toString(), contains('flutter create my_app'));
+          expect(e.toString(), contains('exit code 3'));
+          expect(e.toString(), contains('create failed'));
+          expect(e.toString(), contains('boom'));
+        }
+      },
+    );
+
+    test(
+      'createFlutterAppSync process-start failure gives a clear message',
+      () {
+        final process = FlutterAppProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync(
+            'flutter',
+            ['create', 'my_app'],
+            workingDirectory: any(named: 'workingDirectory'),
+            runInShell: any(named: 'runInShell'),
+          ),
+        ).thenThrow(Exception('no such executable'));
+
+        try {
+          process.createFlutterAppSync(projectName: 'my_app');
+          fail('expected createFlutterAppSync to throw');
+        } catch (e) {
+          expect(e.toString(), contains('could not be started'));
+          expect(e.toString(), contains('flutter create my_app'));
+        }
+      },
+    );
+
+    test(
+      'createFlutterAppSync exits zero: returns normally and logs success',
+      () {
+        final process = FlutterAppProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync(
+            'flutter',
+            ['create', 'my_app'],
+            workingDirectory: any(named: 'workingDirectory'),
+            runInShell: any(named: 'runInShell'),
+          ),
+        ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+
+        expect(
+          () => process.createFlutterAppSync(projectName: 'my_app'),
+          returnsNormally,
+        );
+        expect(logs, contains(contains('✅ Flutter app created')));
+      },
+    );
+
+    test(
+      'package create (core) exits nonzero: runner fails, downstream steps and success are skipped',
+      () {
+        final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+
+        final initialDir = fs.directory('/work')..createSync();
+        fs.currentDirectory = initialDir;
+
+        when(
+          () => runner.runSync('flutter', ['--version']),
+        ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+        when(() => runner.runSync('dart', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          ),
+        );
+        // The app scaffold and package scaffold both return failing; the setup
+        // must fail fast at the app create step (first failure propagates).
+        when(
+          () => runner.runSync(
+            'flutter',
+            ['create', 'my_app'],
+            workingDirectory: any(named: 'workingDirectory'),
+            runInShell: any(named: 'runInShell'),
+          ),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 4,
+            stdout: 'app create failed',
+            stderr: '',
+          ),
+        );
+
+        expect(
+          () => setupRunner.run(['--name', 'my_app']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        expect(logs, contains(contains('flutter create my_app')));
+        expect(logs, contains(contains('exit code 4')));
+        expect(logs, contains(contains('app create failed')));
+        expect(logs, isNot(contains(contains('completed successfully'))));
+
+        // The reserved workspace directory is cleaned up.
+        expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'PackageProcess.createPackageSync exits nonzero: message includes operation, exit status, and output',
+      () {
+        final process = PackageProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync(
+            'flutter',
+            ['create', '--template=package', 'my_pkg'],
+            workingDirectory: 'packages',
+            runInShell: true,
+          ),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 2,
+            stdout: 'pkg create failed',
+            stderr: '',
+          ),
+        );
+
+        try {
+          process.createPackageSync(packageName: 'my_pkg');
+          fail('expected createPackageSync to throw');
+        } catch (e) {
+          expect(e, isA<SubprocessException>());
+          expect(
+            e.toString(),
+            contains('flutter create --template=package my_pkg'),
+          );
+          expect(e.toString(), contains('exit code 2'));
+          expect(e.toString(), contains('pkg create failed'));
+        }
+      },
+    );
+
+    test('PackageProcess.createPackageSync exits zero: returns normally', () {
+      final process = PackageProcess(fs: fs, runner: runner, log: logger);
+
+      when(
+        () => runner.runSync(
+          'flutter',
+          ['create', '--template=package', 'my_pkg'],
+          workingDirectory: 'packages',
+          runInShell: true,
+        ),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+
+      expect(
+        () => process.createPackageSync(packageName: 'my_pkg'),
+        returnsNormally,
+      );
+    });
+
+    test(
+      'addingFlutterDependenciesSync exits nonzero: message includes operation, exit status, and output',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync('flutter', [
+            'pub',
+            'add',
+            'cupertino_icons',
+          ], runInShell: true),
+        ).thenReturn(
+          ProcessRunnerResult(exitCode: 2, stdout: 'add failed', stderr: ''),
+        );
+
+        try {
+          process.addingFlutterDependenciesSync();
+          fail('expected addingFlutterDependenciesSync to throw');
+        } catch (e) {
+          expect(e, isA<SubprocessException>());
+          expect(e.toString(), contains('flutter pub add cupertino_icons'));
+          expect(e.toString(), contains('exit code 2'));
+          expect(e.toString(), contains('add failed'));
+        }
+      },
+    );
+
+    test(
+      'addingFlutterDevDependenciesSync exits nonzero: message includes operation, exit status, and output',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync('flutter', [
+            'pub',
+            'add',
+            '--dev',
+            'flutter_lints',
+            'custom_lint',
+          ], runInShell: true),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 2,
+            stdout: 'dev add failed',
+            stderr: '',
+          ),
+        );
+
+        try {
+          process.addingFlutterDevDependenciesSync();
+          fail('expected addingFlutterDevDependenciesSync to throw');
+        } catch (e) {
+          expect(e, isA<SubprocessException>());
+          expect(
+            e.toString(),
+            contains('flutter pub add --dev flutter_lints custom_lint'),
+          );
+          expect(e.toString(), contains('exit code 2'));
+          expect(e.toString(), contains('dev add failed'));
+        }
+      },
+    );
+
+    test(
+      'runningFlutterPubGetSync exits nonzero: message includes operation, exit status, and output',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync('flutter', ['pub', 'get'], runInShell: true),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 4,
+            stdout: 'pub get failed',
+            stderr: '',
+          ),
+        );
+
+        try {
+          process.runningFlutterPubGetSync();
+          fail('expected runningFlutterPubGetSync to throw');
+        } catch (e) {
+          expect(e, isA<SubprocessException>());
+          expect(e.toString(), contains('flutter pub get'));
+          expect(e.toString(), contains('exit code 4'));
+          expect(e.toString(), contains('pub get failed'));
+        }
+      },
+    );
+
+    test(
+      'AddPackageRunner: pub get exits nonzero → exits code 1, diagnostic shown, success skipped',
+      () {
+        final addPackageRunner = AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        );
+
+        fs.directory('packages').createSync();
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync('workspace:\n  - app\n  - packages/core');
+
+        when(() => runner.runSync('dart', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          ),
+        );
+
+        when(
+          () => runner.runSync(
+            'flutter',
+            any(),
+            workingDirectory: any(named: 'workingDirectory'),
+            runInShell: any(named: 'runInShell'),
+          ),
+        ).thenAnswer((invocation) {
+          final args = invocation.positionalArguments[1] as List<String>;
+          if (args.contains('create')) {
+            final packageName = args.last;
+            final workingDir =
+                invocation.namedArguments[#workingDirectory] as String?;
+            final path = workingDir != null
+                ? '$workingDir/$packageName'
+                : packageName;
+            fs.directory(path).createSync(recursive: true);
+          }
+          return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+        });
+
+        when(
+          () => runner.runSync('flutter', ['pub', 'get'], runInShell: true),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 2,
+            stdout: 'pub get failed',
+            stderr: '',
+          ),
+        );
+
+        expect(
+          () => addPackageRunner.run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        expect(logs, contains(contains('flutter pub get')));
+        expect(logs, contains(contains('exit code 2')));
+        expect(logs, contains(contains('pub get failed')));
+        expect(logs, isNot(contains(contains('added successfully'))));
+      },
+    );
+
+    test(
+      'AddPackageRunner: package create exits nonzero → exits code 1, diagnostic shown, success skipped',
+      () {
+        final addPackageRunner = AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        );
+
+        fs.directory('packages').createSync();
+        fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - app');
+
+        when(() => runner.runSync('dart', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          ),
+        );
+        when(
+          () => runner.runSync(
+            'flutter',
+            ['create', '--template=package', 'new_pkg'],
+            workingDirectory: 'packages',
+            runInShell: true,
+          ),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 2,
+            stdout: 'package create failed',
+            stderr: '',
+          ),
+        );
+
+        expect(
+          () => addPackageRunner.run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        expect(
+          logs,
+          contains(contains('flutter create --template=package new_pkg')),
+        );
+        expect(logs, contains(contains('exit code 2')));
+        expect(logs, contains(contains('package create failed')));
+        expect(logs, isNot(contains(contains('added successfully'))));
+      },
+    );
+
+    test(
+      'flutter pub add (dependencies) exits nonzero: setup fails fast, '
+      'downstream steps and success are skipped, and workspace is cleaned up',
+      () {
+        final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+
+        final initialDir = fs.directory('/work')..createSync();
+        fs.currentDirectory = initialDir;
+
+        when(
+          () => runner.runSync('flutter', ['--version']),
+        ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+        when(() => runner.runSync('dart', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          ),
+        );
+
+        // Everything in the setup path succeeds EXCEPT `flutter pub add
+        // cupertino_icons` (the add-dependencies step).
+        when(
+          () => runner.runSync(
+            any(),
+            any(),
+            workingDirectory: any(named: 'workingDirectory'),
+            runInShell: any(named: 'runInShell'),
+          ),
+        ).thenAnswer((invocation) {
+          final executable = invocation.positionalArguments[0] as String;
+          final args = invocation.positionalArguments[1] as List<String>;
+          if (executable == 'flutter' &&
+              args.contains('add') &&
+              args.contains('cupertino_icons')) {
+            return ProcessRunnerResult(
+              exitCode: 5,
+              stdout: 'dependency resolution failed',
+              stderr: '',
+            );
+          }
+          if (executable == 'flutter' &&
+              args.contains('create') &&
+              !args.contains('--template=package')) {
+            final appName = args.last;
+            fs.directory('$appName/lib').createSync(recursive: true);
+          }
+          if (executable == 'flutter' &&
+              args.contains('create') &&
+              args.contains('--template=package')) {
+            final packageName = args.last;
+            final workingDir =
+                invocation.namedArguments[#workingDirectory] as String?;
+            final path = workingDir != null
+                ? '$workingDir/$packageName'
+                : packageName;
+            fs.directory(path).createSync(recursive: true);
+          }
+          return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+        });
+
+        expect(
+          () => setupRunner.run(['--name', 'my_app']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // The diagnostic log shows the operation, exit code, and Flutter output.
+        expect(logs, contains(contains('flutter pub add cupertino_icons')));
+        expect(logs, contains(contains('exit code 5')));
+        expect(logs, contains(contains('dependency resolution failed')));
+
+        // Downstream steps were skipped: the dev-deps add never ran and the
+        // success message was not printed.
+        verifyNever(
+          () => runner.runSync('flutter', [
+            'pub',
+            'add',
+            '--dev',
+            'flutter_lints',
+            'custom_lint',
+          ], runInShell: true),
+        );
+        expect(logs, isNot(contains(contains('completed successfully'))));
+
+        // The reserved workspace is cleaned up.
+        expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'PackageProcess.createPackageSync process-start failure gives a clear message',
+      () {
+        final process = PackageProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync(
+            'flutter',
+            ['create', '--template=package', 'my_pkg'],
+            workingDirectory: 'packages',
+            runInShell: true,
+          ),
+        ).thenThrow(Exception('no such executable'));
+
+        try {
+          process.createPackageSync(packageName: 'my_pkg');
+          fail('expected createPackageSync to throw');
+        } catch (e) {
+          expect(e.toString(), contains('could not be started'));
+          expect(
+            e.toString(),
+            contains('flutter create --template=package my_pkg'),
+          );
+          expect(e.toString(), contains('no such executable'));
+        }
+      },
+    );
+
+    test(
+      'addingFlutterDependenciesSync process-start failure gives a clear message',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync('flutter', [
+            'pub',
+            'add',
+            'cupertino_icons',
+          ], runInShell: true),
+        ).thenThrow(Exception('no such executable'));
+
+        try {
+          process.addingFlutterDependenciesSync();
+          fail('expected addingFlutterDependenciesSync to throw');
+        } catch (e) {
+          expect(e.toString(), contains('could not be started'));
+          expect(e.toString(), contains('flutter pub add cupertino_icons'));
+          expect(e.toString(), contains('no such executable'));
+        }
+      },
+    );
+
+    test(
+      'addingFlutterDevDependenciesSync process-start failure gives a clear message',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync('flutter', [
+            'pub',
+            'add',
+            '--dev',
+            'flutter_lints',
+            'custom_lint',
+          ], runInShell: true),
+        ).thenThrow(Exception('no such executable'));
+
+        try {
+          process.addingFlutterDevDependenciesSync();
+          fail('expected addingFlutterDevDependenciesSync to throw');
+        } catch (e) {
+          expect(e.toString(), contains('could not be started'));
+          expect(
+            e.toString(),
+            contains('flutter pub add --dev flutter_lints custom_lint'),
+          );
+          expect(e.toString(), contains('no such executable'));
+        }
+      },
+    );
+
+    test(
+      'runningFlutterPubGetSync process-start failure gives a clear message',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+
+        when(
+          () => runner.runSync('flutter', ['pub', 'get'], runInShell: true),
+        ).thenThrow(Exception('no such executable'));
+
+        try {
+          process.runningFlutterPubGetSync();
+          fail('expected runningFlutterPubGetSync to throw');
+        } catch (e) {
+          expect(e.toString(), contains('could not be started'));
+          expect(e.toString(), contains('flutter pub get'));
+          expect(e.toString(), contains('no such executable'));
+        }
+      },
+    );
+  });
 }
