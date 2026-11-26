@@ -25,9 +25,10 @@ class DartProcess {
   /// with the Flutter toolchain used by the CLI.
   ///
   /// Prefers the machine-readable output of `flutter --version --machine`
-  /// (field `dart_version`; tolerates `dart`, `dartVersion` and `dartSDK`),
-  /// and falls back to parsing the text output of `flutter --version` when
-  /// the machine-readable output is missing or unusable.
+  /// (field `dartSdkVersion`, the field real Flutter emits; tolerates
+  /// `dart_version`, `dart`, `dartVersion` and `dartSDK`), and falls back to
+  /// parsing the text output of `flutter --version` when the machine-readable
+  /// output is missing or unusable.
   ///
   /// Returns:
   /// - [String]: bare semantic version (e.g. `3.10.8`) — never a
@@ -114,9 +115,9 @@ class DartProcess {
   /// Parses the machine-readable Flutter version output for a Dart version.
   ///
   /// The JSON must be an object, and one of the candidate fields
-  /// (`dart_version`, `dart`, `dartVersion`, `dartSDK`) must hold a strict
-  /// semantic version string. The first candidate field whose value parses
-  /// wins. Returns null when no candidate field parses.
+  /// (`dartSdkVersion`, `dart_version`, `dart`, `dartVersion`, `dartSDK`) must
+  /// hold a strict semantic version string. The first candidate field whose
+  /// value parses wins. Returns null when no candidate field parses.
   String? _parseMachineOutput(Object? raw) {
     if (raw == null) return null;
     final text = raw.toString().trim();
@@ -130,8 +131,15 @@ class DartProcess {
     }
     if (decoded is! Map) return null;
 
-    // Tolerate plausible field names; pick the first that parses.
-    const candidates = ['dart_version', 'dart', 'dartVersion', 'dartSDK'];
+    // Tolerate plausible field names; pick the first that parses. The real
+    // Flutter machine output (e.g. Flutter 3.50.1) reports `dartSdkVersion`.
+    const candidates = [
+      'dartSdkVersion',
+      'dart_version',
+      'dart',
+      'dartVersion',
+      'dartSDK',
+    ];
     for (final key in candidates) {
       final value = decoded[key];
       if (value is String) {

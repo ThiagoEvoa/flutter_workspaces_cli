@@ -53,7 +53,8 @@ void main() {
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -86,7 +87,8 @@ void main() {
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.10.8"}',
+          stdout:
+              '{"frameworkVersion": "3.38.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.10.8"}',
           stderr: '',
         ),
       );
@@ -118,7 +120,8 @@ void main() {
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.10.8"}',
+            stdout:
+                '{"frameworkVersion": "3.38.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.10.8"}',
             stderr: '',
           ),
         );
@@ -169,7 +172,8 @@ void main() {
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.10.8"',
+            stdout:
+                '{"frameworkVersion": "3.38.0", "flutterRoot": "/opt/flutter", "dartSdkVersion": "3.10.8"',
             stderr: '',
           ),
         );
@@ -261,7 +265,8 @@ void main() {
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.0.0"}',
+            stdout:
+                '{"frameworkVersion": "3.10.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.0.0"}',
             stderr: '',
           ),
         );
@@ -341,7 +346,8 @@ void main() {
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.8.0-dev.0"}',
+          stdout:
+              '{"frameworkVersion": "3.29.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.8.0-dev.0"}',
           stderr: '',
         ),
       );
@@ -388,41 +394,36 @@ void main() {
       expect(dart.getDartVersionSync(), equals('3.11.0'));
     });
 
-    test(
-      'setup: failed detection stops before scaffolding (no files, rollback, cwd restored)',
-      () {
-        final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+    test('setup: failed detection stops before any filesystem writes '
+        '(workspace never created, cwd restored, exit 1)', () {
+      final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
 
-        final initialDir = fs.directory('/work')..createSync();
-        fs.currentDirectory = initialDir;
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
 
-        when(
-          () => runner.runSync('flutter', ['--version']),
-        ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
-        when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
-        ).thenReturn(
-          ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''),
-        );
-        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
-          ProcessRunnerResult(
-            exitCode: 0,
-            stdout: 'no version here',
-            stderr: '',
-          ),
-        );
+      when(
+        () => runner.runSync('flutter', ['--version']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''));
+      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        ProcessRunnerResult(exitCode: 0, stdout: 'no version here', stderr: ''),
+      );
 
-        expect(
-          () => setupRunner.run(['--name', 'my_app']),
-          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
-        );
+      expect(
+        () => setupRunner.run(['--name', 'my_app']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
 
-        // No workspace is left behind and the invocation directory is restored.
-        expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
-        expect(fs.currentDirectory.path, equals('/work'));
-        expect(logs, contains(contains('Flutter toolchain')));
-      },
-    );
+      // Detection runs before any filesystem write: the workspace folder is
+      // never created (no rollback needed) and the invocation directory is
+      // restored.
+      expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+      expect(fs.currentDirectory.path, equals('/work'));
+      expect(logs, contains(contains('Flutter toolchain')));
+      expect(logs, isNot(contains(contains('completed successfully'))));
+    });
 
     test(
       'add-package: failed detection stops before scaffolding (manifest untouched)',
@@ -687,7 +688,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -703,7 +705,8 @@ workspace:
         if (args.join(' ') == '--version --machine') {
           return ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           );
         }
@@ -795,7 +798,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -853,7 +857,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -869,7 +874,8 @@ workspace:
         if (args.join(' ') == '--version --machine') {
           return ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           );
         }
@@ -992,7 +998,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1008,7 +1015,8 @@ workspace:
         if (args.join(' ') == '--version --machine') {
           return ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           );
         }
@@ -1117,7 +1125,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1212,7 +1221,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1268,7 +1278,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1286,7 +1297,8 @@ workspace:
         if (args.join(' ') == '--version --machine') {
           return ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           );
         }
@@ -1369,7 +1381,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1386,7 +1399,8 @@ workspace:
         if (args.join(' ') == '--version --machine') {
           return ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           );
         }
@@ -1451,7 +1465,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1475,7 +1490,8 @@ workspace:
         if (args.join(' ') == '--version --machine') {
           return ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           );
         }
@@ -1615,7 +1631,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1692,7 +1709,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1737,7 +1755,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1754,7 +1773,8 @@ workspace:
         if (args.join(' ') == '--version --machine') {
           return ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           );
         }
@@ -1836,7 +1856,8 @@ workspace:
       ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: '{"dart_version": "3.6.0"}',
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1853,7 +1874,8 @@ workspace:
         if (args.join(' ') == '--version --machine') {
           return ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           );
         }
@@ -2109,7 +2131,8 @@ workspace:
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           ),
         );
@@ -2307,7 +2330,8 @@ workspace:
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           ),
         );
@@ -2324,7 +2348,8 @@ workspace:
           if (args.join(' ') == '--version --machine') {
             return ProcessRunnerResult(
               exitCode: 0,
-              stdout: '{"dart_version": "3.6.0"}',
+              stdout:
+                  '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
               stderr: '',
             );
           }
@@ -2386,7 +2411,8 @@ workspace:
         ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
           ),
         );
@@ -2420,110 +2446,109 @@ workspace:
       },
     );
 
-    test(
-      'flutter pub add (dependencies) exits nonzero: setup fails fast, '
-      'downstream steps and success are skipped, and workspace is cleaned up',
-      () {
-        final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+    test('flutter pub add (dependencies) exits nonzero: setup fails fast, '
+        'downstream steps and success are skipped, and workspace is cleaned up', () {
+      final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
 
-        final initialDir = fs.directory('/work')..createSync();
-        fs.currentDirectory = initialDir;
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
 
-        when(
-          () => runner.runSync('flutter', ['--version']),
-        ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
-        when(
-          () => runner.runSync('flutter', ['--version', '--machine']),
-        ).thenReturn(
-          ProcessRunnerResult(
+      when(
+        () => runner.runSync('flutter', ['--version']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
+          stderr: '',
+        ),
+      );
+
+      // Everything in the setup path succeeds EXCEPT `flutter pub add
+      // cupertino_icons` (the add-dependencies step).
+      when(
+        () => runner.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final executable = invocation.positionalArguments[0] as String;
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
             exitCode: 0,
-            stdout: '{"dart_version": "3.6.0"}',
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
             stderr: '',
-          ),
-        );
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
+        if (executable == 'flutter' &&
+            args.contains('add') &&
+            args.contains('cupertino_icons')) {
+          return ProcessRunnerResult(
+            exitCode: 5,
+            stdout: 'dependency resolution failed',
+            stderr: '',
+          );
+        }
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            !args.contains('--template=package')) {
+          final appName = args.last;
+          fs.directory('$appName/lib').createSync(recursive: true);
+        }
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            args.contains('--template=package')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
 
-        // Everything in the setup path succeeds EXCEPT `flutter pub add
-        // cupertino_icons` (the add-dependencies step).
-        when(
-          () => runner.runSync(
-            any(),
-            any(),
-            workingDirectory: any(named: 'workingDirectory'),
-            runInShell: any(named: 'runInShell'),
-          ),
-        ).thenAnswer((invocation) {
-          final executable = invocation.positionalArguments[0] as String;
-          final args = invocation.positionalArguments[1] as List<String>;
-          if (args.join(' ') == '--version --machine') {
-            return ProcessRunnerResult(
-              exitCode: 0,
-              stdout: '{"dart_version": "3.6.0"}',
-              stderr: '',
-            );
-          }
-          if (args.join(' ') == '--version') {
-            return ProcessRunnerResult(
-              exitCode: 0,
-              stdout: 'Dart SDK version: 3.6.0',
-              stderr: '',
-            );
-          }
-          if (executable == 'flutter' &&
-              args.contains('add') &&
-              args.contains('cupertino_icons')) {
-            return ProcessRunnerResult(
-              exitCode: 5,
-              stdout: 'dependency resolution failed',
-              stderr: '',
-            );
-          }
-          if (executable == 'flutter' &&
-              args.contains('create') &&
-              !args.contains('--template=package')) {
-            final appName = args.last;
-            fs.directory('$appName/lib').createSync(recursive: true);
-          }
-          if (executable == 'flutter' &&
-              args.contains('create') &&
-              args.contains('--template=package')) {
-            final packageName = args.last;
-            final workingDir =
-                invocation.namedArguments[#workingDirectory] as String?;
-            final path = workingDir != null
-                ? '$workingDir/$packageName'
-                : packageName;
-            fs.directory(path).createSync(recursive: true);
-          }
-          return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
-        });
+      expect(
+        () => setupRunner.run(['--name', 'my_app']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
 
-        expect(
-          () => setupRunner.run(['--name', 'my_app']),
-          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
-        );
+      // The diagnostic log shows the operation, exit code, and Flutter output.
+      expect(logs, contains(contains('flutter pub add cupertino_icons')));
+      expect(logs, contains(contains('exit code 5')));
+      expect(logs, contains(contains('dependency resolution failed')));
 
-        // The diagnostic log shows the operation, exit code, and Flutter output.
-        expect(logs, contains(contains('flutter pub add cupertino_icons')));
-        expect(logs, contains(contains('exit code 5')));
-        expect(logs, contains(contains('dependency resolution failed')));
+      // Downstream steps were skipped: the dev-deps add never ran and the
+      // success message was not printed.
+      verifyNever(
+        () => runner.runSync('flutter', [
+          'pub',
+          'add',
+          '--dev',
+          'flutter_lints',
+          'custom_lint',
+        ], runInShell: true),
+      );
+      expect(logs, isNot(contains(contains('completed successfully'))));
 
-        // Downstream steps were skipped: the dev-deps add never ran and the
-        // success message was not printed.
-        verifyNever(
-          () => runner.runSync('flutter', [
-            'pub',
-            'add',
-            '--dev',
-            'flutter_lints',
-            'custom_lint',
-          ], runInShell: true),
-        );
-        expect(logs, isNot(contains(contains('completed successfully'))));
-
-        // The reserved workspace is cleaned up.
-        expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
-      },
-    );
+      // The reserved workspace is cleaned up.
+      expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+    });
 
     test(
       'PackageProcess.createPackageSync process-start failure gives a clear message',

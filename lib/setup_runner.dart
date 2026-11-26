@@ -32,19 +32,27 @@ class SetupRunner {
 
       projectName = projectNameProcess.getProjectName(arguments: arguments);
 
-      // Reserve the workspace directory EXCLUSIVELY before any Flutter/Dart
-      // scaffolding command runs. An occupied path (an existing directory, file,
-      // or link) is refused here, so an existing workspace with user files is
-      // never touched and no `flutter`/`dart` process is invoked for a rejected
-      // attempt. The exact directory is captured so rollback is scoped to it.
+      // Exclusively reserve the workspace target path BEFORE any Flutter/Dart
+      // process or filesystem write runs. An occupied path (an existing
+      // directory, file, or link) is refused here, so an existing workspace
+      // with user files is never touched and no `flutter` process is invoked
+      // for a rejected attempt. This is a read-only guard; the folder itself
+      // is created later (below) so detection runs before any filesystem
+      // write. The exact directory is captured so rollback is scoped to it.
+      workspace.assertWorkspaceFolderAvailableSync(projectName: projectName);
+
+      flutter.isFlutterInstalledSync();
+
+      // Detect the Flutter toolchain's Dart version BEFORE any filesystem
+      // writes happen (the reservation and every scaffold step come after). A
+      // detection failure is thrown here, before the workspace folder exists,
+      // and the workspace is never created or rolled back.
+      final dartVersion = dart.getDartVersionSync();
+
       reservedDirectory = workspace.createWorkspaceFolderSync(
         projectName: projectName,
       );
       didCreateWorkspace = true;
-
-      flutter.isFlutterInstalledSync();
-
-      final dartVersion = dart.getDartVersionSync();
 
       flutterApp.createFlutterAppSync(projectName: projectName);
 
