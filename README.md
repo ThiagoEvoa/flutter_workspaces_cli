@@ -9,15 +9,17 @@ A command-line tool for scaffolding and managing monorepo-style Flutter workspac
 - ➕ **Add Package**: Easily add new packages to your existing workspace with a single command.
 - 📱 **Flutter App Scaffolding**: Generates a main Flutter application that imports and uses the core package.
 - 🎯 **Workspace Resolution**: Configures `pubspec.yaml` files with workspace resolution for monorepo support.
-- 🔍 **Environment Validation**: Checks for Flutter and Dart SDK requirements (Dart 3.6.0+).
+- 🔍 **Environment Validation**: Verifies that the Flutter toolchain on PATH bundles a supported Dart SDK (>= 3.6.0) and uses that same version for every generated manifest.
 - 📋 **Dependency Management**: Automatically adds common Flutter dependencies (cupertino_icons, flutter_lints, custom_lint).
 - 🧹 **Error Handling**: Reverts workspace creation on failure for clean error states.
 - 🏗️ **SOLID Architecture**: Refactored to use Dependency Injection with `FileSystem` and `ProcessRunner` abstractions for better testability and maintainability.
 
 ## Requirements
 
-- **Dart SDK**: 3.6.0 or higher
-- **Flutter SDK**: Latest stable version (with Dart 3.6.0+)
+Two different Dart requirements apply, and they are not the same:
+
+- **CLI installation** (the `flutter_workspaces_cli` package itself): [Dart SDK](https://dart.dev/get-dart) `^3.11.5` (per this package's own `pubspec.yaml` `environment.sdk`) plus the [Flutter SDK](https://docs.flutter.dev/get-started/install) required to use the CLI.
+- **Flutter toolchain used for generation** (the `flutter` executable on PATH that scaffolds and resolves the workspaces): must bundle a Dart SDK `>= 3.6.0`. The CLI detects that version (machine-readable `flutter --version --machine`, with a text-parse fallback) and serializes it into every generated manifest. Workspace glob syntax (`packages/*`) is emitted only when the bundled Dart SDK is `>= 3.11` (both the resolver and the generated workspace constraint support it); older toolchains generate explicit member lists (`packages/core`).
 - **System**: macOS, Linux, or Windows with shell support
 
 ## Installation

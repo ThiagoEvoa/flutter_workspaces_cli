@@ -114,7 +114,9 @@ class _MyHomePageState extends State<MyHomePage> {
   /// Writes a workspace-aware `pubspec.yaml` for the Flutter app.
   ///
   /// Parameters:
-  /// - `dartVersion`: the Dart SDK constraint (e.g. `3.10.8`).
+  /// - `dartVersion`: the bare Dart SDK version (e.g. `3.10.8`) reported by
+  ///   the Flutter toolchain used by the CLI. The generated `environment.sdk`
+  ///   constraint is serialized exactly once as `sdk: ^<dartVersion>`.
   /// - `projectName`: the application name used as the package name in pubspec.
   void updateFlutterAppPubspecSync({
     required String dartVersion,

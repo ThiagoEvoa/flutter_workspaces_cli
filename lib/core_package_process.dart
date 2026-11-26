@@ -30,8 +30,9 @@ class CorePackageProcess {
   /// Writes `packages/core/pubspec.yaml` configured for workspace resolution.
   ///
   /// Parameters:
-  /// - `dartVersion`: the Dart SDK constraint to use (e.g. `3.10.8`). The
-  ///   generated file includes `sdk: ^$dartVersion` in the `environment`.
+  /// - `dartVersion`: the bare Dart SDK version (e.g. `3.10.8`) reported by
+  ///   the Flutter toolchain used by the CLI. The generated file includes
+  ///   `sdk: ^<dartVersion>` in the `environment`.
   void updateCorePubspecSync({required String dartVersion}) {
     _packageProcess.updatePubspecSync(
       packageName: 'core',

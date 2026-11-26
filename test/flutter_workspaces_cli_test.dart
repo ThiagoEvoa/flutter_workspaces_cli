@@ -48,10 +48,12 @@ void main() {
   group('DartProcess', () {
     test('getDartVersionSync returns a version string on success', () {
       final process = DartProcess(runner: runner, log: logger);
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0 (stable)',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -60,14 +62,470 @@ void main() {
       expect(version, equals('3.6.0'));
     });
 
-    test('getDartVersionSync returns fallback on failure', () {
+    test('getDartVersionSync throws on failed detection (nonzero exit)', () {
       final process = DartProcess(runner: runner, log: logger);
       when(
-        () => runner.runSync('dart', ['--version']),
+        () => runner.runSync('flutter', ['--version', '--machine']),
       ).thenReturn(ProcessRunnerResult(exitCode: 1, stdout: '', stderr: ''));
 
-      final version = process.getDartVersionSync();
-      expect(version, equals('^3.6.0'));
+      expect(
+        () => process.getDartVersionSync(),
+        throwsA(isA<SubprocessException>()),
+      );
+    });
+  });
+
+  group('Issue #15: Flutter toolchain Dart version', () {
+    test('different PATH dart vs toolchain dart: the toolchain version is '
+        'serialized and drives the workspace layout', () {
+      // The Flutter toolchain bundles Dart 3.10.8; the CLI never invokes a
+      // `dart` binary on PATH (e.g. one reporting 3.14.0).
+      final dart = DartProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: '{"dart_version": "3.10.8"}',
+          stderr: '',
+        ),
+      );
+
+      final version = dart.getDartVersionSync();
+
+      // The machine output is used, not any PATH dart version.
+      expect(version, equals('3.10.8'));
+      expect(version, isNot(contains('^')));
+      verifyNever(() => runner.runSync('dart', any()));
+
+      // The serialized manifests use the toolchain version, and the 3.11
+      // boundary is driven by the toolchain version (3.10.8 → explicit list).
+      final workspace = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      workspace.createRootPubspecSync(dartVersion: version, projectName: 'app');
+      final content = fs.file('pubspec.yaml').readAsStringSync();
+      expect(content, contains('sdk: ^3.10.8'));
+      expect(content, isNot(contains('^^')));
+      expect(content, contains('- packages/core'));
+      expect(content, isNot(contains('- packages/*')));
+    });
+
+    test(
+      'machine output is preferred over the text output of flutter --version',
+      () {
+        final dart = DartProcess(runner: runner, log: logger);
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.10.8"}',
+            stderr: '',
+          ),
+        );
+        // A text output that would report a different version must not win.
+        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.14.0',
+            stderr: '',
+          ),
+        );
+
+        expect(dart.getDartVersionSync(), equals('3.10.8'));
+      },
+    );
+
+    test(
+      'machine output falls back to the text parse when dart_version is missing',
+      () {
+        final dart = DartProcess(runner: runner, log: logger);
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"channel": "stable", "output": []}',
+            stderr: '',
+          ),
+        );
+        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.10.8 (stable)',
+            stderr: '',
+          ),
+        );
+
+        expect(dart.getDartVersionSync(), equals('3.10.8'));
+      },
+    );
+
+    test(
+      'machine output falls back to the text parse when JSON is malformed',
+      () {
+        final dart = DartProcess(runner: runner, log: logger);
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.10.8"',
+            stderr: '',
+          ),
+        );
+        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+          ProcessRunnerResult(exitCode: 0, stdout: 'Dart 3.10.8', stderr: ''),
+        );
+
+        expect(dart.getDartVersionSync(), equals('3.10.8'));
+      },
+    );
+
+    test(
+      'missing machine dart_version and unparseable text → actionable throw',
+      () {
+        final dart = DartProcess(runner: runner, log: logger);
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
+          ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''),
+        );
+        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Flutter is busy',
+            stderr: '',
+          ),
+        );
+
+        expect(
+          () => dart.getDartVersionSync(),
+          throwsA(
+            isA<Exception>().having(
+              (e) => e.toString(),
+              'msg',
+              contains('Flutter toolchain'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test('malformed machine JSON and unparseable text → actionable throw', () {
+      final dart = DartProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
+        ProcessRunnerResult(exitCode: 0, stdout: 'not json at all', stderr: ''),
+      );
+      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        ProcessRunnerResult(exitCode: 0, stdout: 'no version here', stderr: ''),
+      );
+
+      expect(
+        () => dart.getDartVersionSync(),
+        throwsA(
+          isA<Exception>().having(
+            (e) => e.toString(),
+            'msg',
+            contains('Flutter toolchain'),
+          ),
+        ),
+      );
+    });
+
+    test('machine output cannot be started → actionable throw', () {
+      final dart = DartProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenThrow(Exception('no such executable'));
+
+      expect(
+        () => dart.getDartVersionSync(),
+        throwsA(
+          isA<Exception>().having(
+            (e) => e.toString(),
+            'msg',
+            contains('Flutter toolchain'),
+          ),
+        ),
+      );
+    });
+
+    test(
+      'unsupported machine version (3.0.0) → actionable throw, no filesystem writes',
+      () {
+        final dart = DartProcess(runner: runner, log: logger);
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.0.0"}',
+            stderr: '',
+          ),
+        );
+
+        expect(
+          () => dart.getDartVersionSync(),
+          throwsA(
+            isA<Exception>().having(
+              (e) => e.toString(),
+              'msg',
+              contains('3.6.0'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'unsupported text version below the floor (3.5.0) → actionable throw',
+      () {
+        final dart = DartProcess(runner: runner, log: logger);
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
+          ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''),
+        );
+        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.5.0',
+            stderr: '',
+          ),
+        );
+
+        expect(
+          () => dart.getDartVersionSync(),
+          throwsA(
+            isA<Exception>().having(
+              (e) => e.toString(),
+              'msg',
+              contains('3.6.0'),
+            ),
+          ),
+        );
+      },
+    );
+
+    test('malformed version (3.x) in text output → actionable throw', () {
+      final dart = DartProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''));
+      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.x',
+          stderr: '',
+        ),
+      );
+
+      expect(
+        () => dart.getDartVersionSync(),
+        throwsA(
+          isA<Exception>().having(
+            (e) => e.toString(),
+            'msg',
+            contains('Flutter toolchain'),
+          ),
+        ),
+      );
+    });
+
+    test('prerelease machine version (3.8.0-dev.0) → actionable throw', () {
+      final dart = DartProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: '{"dart_version": "3.8.0-dev.0"}',
+          stderr: '',
+        ),
+      );
+      // The text parse must also reject the prerelease token.
+      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.8.0-dev.0',
+          stderr: '',
+        ),
+      );
+
+      expect(() => dart.getDartVersionSync(), throwsA(isA<Exception>()));
+    });
+
+    test('prerelease text version (3.11.0-beta.1) → actionable throw', () {
+      final dart = DartProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''));
+      when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.11.0-beta.1',
+          stderr: '',
+        ),
+      );
+
+      expect(() => dart.getDartVersionSync(), throwsA(isA<Exception>()));
+    });
+
+    test('machine output tolerates other plausible Dart version fields', () {
+      final dart = DartProcess(runner: runner, log: logger);
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: '{"dartVersion": "3.11.0"}',
+          stderr: '',
+        ),
+      );
+
+      expect(dart.getDartVersionSync(), equals('3.11.0'));
+    });
+
+    test(
+      'setup: failed detection stops before scaffolding (no files, rollback, cwd restored)',
+      () {
+        final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+
+        final initialDir = fs.directory('/work')..createSync();
+        fs.currentDirectory = initialDir;
+
+        when(
+          () => runner.runSync('flutter', ['--version']),
+        ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
+          ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''),
+        );
+        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'no version here',
+            stderr: '',
+          ),
+        );
+
+        expect(
+          () => setupRunner.run(['--name', 'my_app']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // No workspace is left behind and the invocation directory is restored.
+        expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+        expect(fs.currentDirectory.path, equals('/work'));
+        expect(logs, contains(contains('Flutter toolchain')));
+      },
+    );
+
+    test(
+      'add-package: failed detection stops before scaffolding (manifest untouched)',
+      () {
+        fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app\n');
+        fs.directory('packages').createSync();
+
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
+          ProcessRunnerResult(exitCode: 0, stdout: '{}', stderr: ''),
+        );
+        when(() => runner.runSync('flutter', ['--version'])).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'no version here',
+            stderr: '',
+          ),
+        );
+
+        expect(
+          () => AddPackageRunner(
+            fs: fs,
+            runner: runner,
+            log: logger,
+          ).run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // The root manifest is untouched and no package is created.
+        expect(
+          fs.file('pubspec.yaml').readAsStringSync(),
+          equals('workspace:\n  - my_app\n'),
+        );
+        expect(fs.directory('packages/new_pkg').existsSync(), isFalse);
+        expect(logs, contains(contains('Flutter toolchain')));
+      },
+    );
+
+    test(
+      'boundary: toolchain 3.10.9 → explicit member list (packages/core)',
+      () {
+        final workspace = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        workspace.createRootPubspecSync(
+          dartVersion: '3.10.9',
+          projectName: 'app',
+        );
+
+        final content = fs.file('pubspec.yaml').readAsStringSync();
+        expect(content, contains('- packages/core'));
+        expect(content, isNot(contains('- packages/*')));
+        expect(content, contains('sdk: ^3.10.9'));
+      },
+    );
+
+    test('boundary: toolchain 3.11.0 → glob (packages/*)', () {
+      final workspace = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      workspace.createRootPubspecSync(
+        dartVersion: '3.11.0',
+        projectName: 'app',
+      );
+
+      final content = fs.file('pubspec.yaml').readAsStringSync();
+      expect(content, contains('- packages/*'));
+      expect(content, isNot(contains('- packages/core')));
+      expect(content, contains('sdk: ^3.11.0'));
+    });
+
+    test('manifests contain sdk constraints serialized exactly once', () {
+      final workspace = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      workspace.createRootPubspecSync(
+        dartVersion: '3.10.8',
+        projectName: 'app',
+      );
+      final rootContent = fs.file('pubspec.yaml').readAsStringSync();
+      expect(rootContent, contains('sdk: ^3.10.8'));
+      expect(rootContent, isNot(contains('^^')));
+
+      fs.directory('packages/my_pkg').createSync(recursive: true);
+      final packageProcess = PackageProcess(
+        fs: fs,
+        runner: runner,
+        log: logger,
+      );
+      packageProcess.updatePubspecSync(
+        packageName: 'my_pkg',
+        dartVersion: '3.10.8',
+      );
+      final packageContent = fs
+          .file('packages/my_pkg/pubspec.yaml')
+          .readAsStringSync();
+      expect(packageContent, contains('sdk: ^3.10.8'));
+      expect(packageContent, isNot(contains('^^')));
+
+      fs.directory('app').createSync(recursive: true);
+      final appProcess = FlutterAppProcess(fs: fs, runner: runner, log: logger);
+      appProcess.updateFlutterAppPubspecSync(
+        dartVersion: '3.10.8',
+        projectName: 'app',
+      );
+      final appContent = fs.file('app/pubspec.yaml').readAsStringSync();
+      expect(appContent, contains('sdk: ^3.10.8'));
+      expect(appContent, isNot(contains('^^')));
     });
   });
 
@@ -224,10 +682,12 @@ workspace:
     // A valid workspace root (manifest with a "workspace:" section and a
     // "packages" directory) shared by most Issue #13 tests.
     void stubSuccessfulFlutter() {
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -240,6 +700,20 @@ workspace:
         ),
       ).thenAnswer((invocation) {
         final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
         if (args.contains('create')) {
           final packageName = args.last;
           final workingDir =
@@ -316,10 +790,12 @@ workspace:
       fs.file('pubspec.lock').writeAsStringSync('ORIGINAL-LOCK\n');
       fs.directory('packages').createSync();
 
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -372,10 +848,12 @@ workspace:
       fs.file('pubspec.lock').writeAsStringSync('ORIGINAL-LOCK\n');
       fs.directory('packages').createSync();
 
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -388,6 +866,20 @@ workspace:
         ),
       ).thenAnswer((invocation) {
         final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
         if (args.contains('create')) {
           final packageName = args.last;
           final workingDir =
@@ -495,10 +987,12 @@ workspace:
       fs.file('pubspec.lock').writeAsStringSync('ORIGINAL-LOCK\n');
       fs.directory('packages').createSync();
 
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -511,6 +1005,20 @@ workspace:
         ),
       ).thenAnswer((invocation) {
         final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
         if (args.contains('create')) {
           final packageName = args.last;
           final workingDir =
@@ -604,10 +1112,12 @@ workspace:
       when(() => mockFs.file('pubspec.lock')).thenReturn(lockFile);
       when(() => lockFile.existsSync()).thenReturn(false);
 
-      when(() => runner2.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner2.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -697,10 +1207,12 @@ workspace:
         restoredLockContent = invocation.positionalArguments[0] as String;
       });
 
-      when(() => runner2.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner2.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -751,10 +1263,12 @@ workspace:
       fs.file('pubspec.lock').writeAsStringSync(originalLock);
       fs.directory('packages').createSync();
 
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -769,6 +1283,20 @@ workspace:
         ),
       ).thenAnswer((invocation) {
         final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
         if (args.contains('create')) {
           final packageName = args.last;
           final workingDir =
@@ -836,10 +1364,12 @@ workspace:
       fs.directory('packages').createSync();
       fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
 
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -853,6 +1383,20 @@ workspace:
         ),
       ).thenAnswer((invocation) {
         final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
         if (args.contains('create')) {
           final packageName = args.last;
           final workingDir =
@@ -902,10 +1446,12 @@ workspace:
       fs.currentDirectory = initialDir;
 
       // Mock dart version
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -926,6 +1472,20 @@ workspace:
       ).thenAnswer((invocation) {
         final executable = invocation.positionalArguments[0] as String;
         final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
         if (executable == 'flutter' &&
             args.contains('create') &&
             !args.contains('--template=package')) {
@@ -1033,7 +1593,7 @@ workspace:
 
       // No Flutter/Dart process was invoked for the rejected attempt.
       verifyNever(() => runner.runSync('flutter', any()));
-      verifyNever(() => runner.runSync('dart', any()));
+      verifyNever(() => runner.runSync('flutter', ['--version', '--machine']));
       expect(logs, contains(contains('already exists')));
     });
 
@@ -1050,10 +1610,12 @@ workspace:
       when(
         () => runner.runSync('flutter', ['--version']),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1125,10 +1687,12 @@ workspace:
       when(
         () => runner2.runSync('flutter', ['--version']),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
-      when(() => runner2.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner2.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1168,10 +1732,12 @@ workspace:
       when(
         () => runner1.runSync('flutter', ['--version']),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
-      when(() => runner1.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner1.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1185,6 +1751,20 @@ workspace:
       ).thenAnswer((invocation) {
         final executable = invocation.positionalArguments[0] as String;
         final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
         if (executable == 'flutter' &&
             args.contains('create') &&
             !args.contains('--template=package')) {
@@ -1238,7 +1818,7 @@ workspace:
         isTrue,
       );
       verifyNever(() => runner2.runSync('flutter', any()));
-      verifyNever(() => runner2.runSync('dart', any()));
+      verifyNever(() => runner2.runSync('flutter', ['--version', '--machine']));
     });
 
     test('(e) a successful setup restores the working directory to the '
@@ -1251,10 +1831,12 @@ workspace:
       when(
         () => runner.runSync('flutter', ['--version']),
       ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
-      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+      when(
+        () => runner.runSync('flutter', ['--version', '--machine']),
+      ).thenReturn(
         ProcessRunnerResult(
           exitCode: 0,
-          stdout: 'Dart SDK version: 3.6.0',
+          stdout: '{"dart_version": "3.6.0"}',
           stderr: '',
         ),
       );
@@ -1268,6 +1850,20 @@ workspace:
       ).thenAnswer((invocation) {
         final executable = invocation.positionalArguments[0] as String;
         final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: '{"dart_version": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
         if (executable == 'flutter' &&
             args.contains('create') &&
             !args.contains('--template=package')) {
@@ -1322,7 +1918,7 @@ workspace:
 
       // No Flutter/Dart process was invoked for the rejected attempt.
       verifyNever(() => runner.runSync('flutter', any()));
-      verifyNever(() => runner.runSync('dart', any()));
+      verifyNever(() => runner.runSync('flutter', ['--version', '--machine']));
       expect(logs, contains(contains('already exists')));
     });
 
@@ -1347,7 +1943,7 @@ workspace:
 
       // No Flutter/Dart process was invoked for the rejected attempt.
       verifyNever(() => runner.runSync('flutter', any()));
-      verifyNever(() => runner.runSync('dart', any()));
+      verifyNever(() => runner.runSync('flutter', ['--version', '--machine']));
       expect(logs, contains(contains('already exists')));
     });
   });
@@ -1385,7 +1981,9 @@ workspace:
 
         // Downstream steps and the success message were skipped.
         expect(logs, isNot(contains(contains('completed successfully'))));
-        verifyNever(() => runner.runSync('dart', any()));
+        verifyNever(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        );
         verifyNever(
           () => runner.runSync('flutter', [
             'pub',
@@ -1506,10 +2104,12 @@ workspace:
         when(
           () => runner.runSync('flutter', ['--version']),
         ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
-        when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: 'Dart SDK version: 3.6.0',
+            stdout: '{"dart_version": "3.6.0"}',
             stderr: '',
           ),
         );
@@ -1702,10 +2302,12 @@ workspace:
             .file('pubspec.yaml')
             .writeAsStringSync('workspace:\n  - app\n  - packages/core');
 
-        when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: 'Dart SDK version: 3.6.0',
+            stdout: '{"dart_version": "3.6.0"}',
             stderr: '',
           ),
         );
@@ -1719,6 +2321,20 @@ workspace:
           ),
         ).thenAnswer((invocation) {
           final args = invocation.positionalArguments[1] as List<String>;
+          if (args.join(' ') == '--version --machine') {
+            return ProcessRunnerResult(
+              exitCode: 0,
+              stdout: '{"dart_version": "3.6.0"}',
+              stderr: '',
+            );
+          }
+          if (args.join(' ') == '--version') {
+            return ProcessRunnerResult(
+              exitCode: 0,
+              stdout: 'Dart SDK version: 3.6.0',
+              stderr: '',
+            );
+          }
           if (args.contains('create')) {
             final packageName = args.last;
             final workingDir =
@@ -1765,10 +2381,12 @@ workspace:
         fs.directory('packages').createSync();
         fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - app');
 
-        when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: 'Dart SDK version: 3.6.0',
+            stdout: '{"dart_version": "3.6.0"}',
             stderr: '',
           ),
         );
@@ -1814,10 +2432,12 @@ workspace:
         when(
           () => runner.runSync('flutter', ['--version']),
         ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
-        when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        when(
+          () => runner.runSync('flutter', ['--version', '--machine']),
+        ).thenReturn(
           ProcessRunnerResult(
             exitCode: 0,
-            stdout: 'Dart SDK version: 3.6.0',
+            stdout: '{"dart_version": "3.6.0"}',
             stderr: '',
           ),
         );
@@ -1834,6 +2454,20 @@ workspace:
         ).thenAnswer((invocation) {
           final executable = invocation.positionalArguments[0] as String;
           final args = invocation.positionalArguments[1] as List<String>;
+          if (args.join(' ') == '--version --machine') {
+            return ProcessRunnerResult(
+              exitCode: 0,
+              stdout: '{"dart_version": "3.6.0"}',
+              stderr: '',
+            );
+          }
+          if (args.join(' ') == '--version') {
+            return ProcessRunnerResult(
+              exitCode: 0,
+              stdout: 'Dart SDK version: 3.6.0',
+              stderr: '',
+            );
+          }
           if (executable == 'flutter' &&
               args.contains('add') &&
               args.contains('cupertino_icons')) {
@@ -2177,7 +2811,7 @@ publish_to: none
 
 # A comment about this file
 environment:
-  sdk: ^3.11.5
+  sdk: ^3.10.8
 
 workspace:
   - my_app
@@ -2198,7 +2832,7 @@ publish_to: none
 
 # A comment about this file
 environment:
-  sdk: ^3.11.5
+  sdk: ^3.10.8
 
 workspace:
   - my_app

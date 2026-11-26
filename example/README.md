@@ -2,6 +2,11 @@
 
 This example demonstrates how to use the `flutter_workspaces_cli` to scaffold a new monorepo project and manage it.
 
+## Requirements
+
+- **CLI installation**: Dart SDK `^3.11.5` (per the CLI's own `pubspec.yaml` `environment.sdk`) plus the Flutter SDK.
+- **Flutter toolchain used for generation**: the `flutter` executable on PATH must bundle a Dart SDK `>= 3.6.0`. Workspace glob syntax (`packages/*`) requires `>= 3.11`; older toolchains generate explicit member lists (`packages/core`).
+
 ## 1. Installation
 
 First, install the CLI globally using Dart:

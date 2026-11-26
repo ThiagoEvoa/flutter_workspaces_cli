@@ -536,7 +536,9 @@ class WorkspaceProcess {
   /// Writes the workspace root `pubspec.yaml` with basic configuration.
   ///
   /// Parameters:
-  /// - `dartVersion`: Dart SDK version constraint (e.g. `3.10.8`).
+  /// - `dartVersion`: the bare Dart SDK version (e.g. `3.10.8`) reported by
+  ///   the Flutter toolchain used by the CLI. The generated `environment.sdk`
+  ///   constraint is serialized exactly once as `sdk: ^<dartVersion>`.
   /// - `projectName`: the main application folder name included in the workspace.
   void createRootPubspecSync({
     required String dartVersion,
