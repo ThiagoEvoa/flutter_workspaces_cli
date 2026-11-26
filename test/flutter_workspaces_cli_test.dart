@@ -1992,4 +1992,400 @@ workspace:
       },
     );
   });
+
+  group('WorkspaceProcess (Issue #14: YAML-parsed workspace membership)', () {
+    test(
+      'prefix collision: adding feature does not see feature_tools as present',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync('workspace:\n  - packages/feature_tools\n');
+
+        process.updateRootPubspecSync(packageName: 'feature');
+
+        expect(
+          fs.file('pubspec.yaml').readAsStringSync(),
+          equals(
+            'workspace:\n  - packages/feature_tools\n  - packages/feature\n',
+          ),
+        );
+      },
+    );
+
+    test('prefix collision: adding feature_tools alongside feature', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync('workspace:\n  - packages/feature\n');
+
+      process.updateRootPubspecSync(packageName: 'feature_tools');
+
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals(
+          'workspace:\n  - packages/feature\n  - packages/feature_tools\n',
+        ),
+      );
+    });
+
+    test(
+      'quoted flow-style entries parse correctly and a new member is inserted',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync('workspace: ["packages/core", "apps/my_app"]\n');
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        expect(
+          fs.file('pubspec.yaml').readAsStringSync(),
+          equals(
+            'workspace: ["packages/core", "apps/my_app", packages/new_pkg]\n',
+          ),
+        );
+      },
+    );
+
+    test(
+      'inline flow-style list parses as a sequence and a new member is inserted',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync('workspace: [packages/lib_a, packages/lib_b]\n');
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        expect(
+          fs.file('pubspec.yaml').readAsStringSync(),
+          equals(
+            'workspace: [packages/lib_a, packages/lib_b, packages/new_pkg]\n',
+          ),
+        );
+      },
+    );
+
+    test('empty flow-style list accepts a new member', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs.file('pubspec.yaml').writeAsStringSync('workspace: []\n');
+
+      process.updateRootPubspecSync(packageName: 'new_pkg');
+
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals('workspace: [packages/new_pkg]\n'),
+      );
+    });
+
+    test(
+      'a wildcard member with a trailing comment is still a covered wildcard',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync(
+              'workspace:\n  - packages/*   # wildcard for all packages\n',
+            );
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        expect(
+          fs.file('pubspec.yaml').readAsStringSync(),
+          equals('workspace:\n  - packages/*   # wildcard for all packages\n'),
+        );
+        expect(logs, contains(contains('Wildcard "packages/*" detected')));
+      },
+    );
+
+    test('comment text containing a wildcard is not mistaken for a wildcard', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync(
+            'workspace:\n  - packages/core   # packages/* is NOT a wildcard here\n',
+          );
+
+      process.updateRootPubspecSync(packageName: 'new_pkg');
+
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals(
+          'workspace:\n  - packages/core   # packages/* is NOT a wildcard here\n  - packages/new_pkg\n',
+        ),
+      );
+    });
+
+    test('CRLF file: insertion preserves the CRLF convention and other keys', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync(
+            'name: _\r\n\r\nworkspace:\r\n  - app\r\n  - packages/core\r\n\r\ndependencies:\r\n  flutter:\r\n    sdk: flutter\r\n',
+          );
+
+      process.updateRootPubspecSync(packageName: 'new_pkg');
+
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals(
+          'name: _\r\n\r\nworkspace:\r\n  - app\r\n  - packages/core\r\n  - packages/new_pkg\r\n\r\ndependencies:\r\n  flutter:\r\n    sdk: flutter\r\n',
+        ),
+      );
+    });
+
+    test(
+      'wildcard entry: packages/* covers packages/any_new and leaves the file unchanged',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync('workspace:\n  - packages/*\n');
+
+        process.updateRootPubspecSync(packageName: 'any_new');
+
+        expect(
+          fs.file('pubspec.yaml').readAsStringSync(),
+          equals('workspace:\n  - packages/*\n'),
+        );
+        expect(logs, contains(contains('Wildcard "packages/*" detected')));
+      },
+    );
+
+    test(
+      'wildcard entry: packages/* does not cover apps/other, so insertion happens',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - apps/*\n');
+
+        process.updateRootPubspecSync(packageName: 'other');
+
+        expect(
+          fs.file('pubspec.yaml').readAsStringSync(),
+          equals('workspace:\n  - apps/*\n  - packages/other\n'),
+        );
+      },
+    );
+
+    test('unrelated settings and comments are preserved byte-for-byte', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      const original = """name: _
+version: 0.1.0
+description: A Dart workspace example
+publish_to: none
+
+# A comment about this file
+environment:
+  sdk: ^3.11.5
+
+workspace:
+  - my_app
+  - packages/core
+
+dependencies:
+  flutter:
+    sdk: flutter
+""";
+      fs.file('pubspec.yaml').writeAsStringSync(original);
+
+      process.updateRootPubspecSync(packageName: 'new_pkg');
+
+      const expected = """name: _
+version: 0.1.0
+description: A Dart workspace example
+publish_to: none
+
+# A comment about this file
+environment:
+  sdk: ^3.11.5
+
+workspace:
+  - my_app
+  - packages/core
+  - packages/new_pkg
+
+dependencies:
+  flutter:
+    sdk: flutter
+""";
+      expect(fs.file('pubspec.yaml').readAsStringSync(), equals(expected));
+    });
+
+    test('explicit member layouts are preserved when inserting a new member', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      const original =
+          'workspace:\n  - app\n  # keep this comment\n  - packages/core\n';
+      fs.file('pubspec.yaml').writeAsStringSync(original);
+
+      process.updateRootPubspecSync(packageName: 'new_pkg');
+
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals(
+          'workspace:\n  - app\n  # keep this comment\n  - packages/core\n  - packages/new_pkg\n',
+        ),
+      );
+    });
+
+    test(
+      'missing workspace field is rejected with a distinct message before any mutation',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        const original = 'name: _\n';
+        fs.file('pubspec.yaml').writeAsStringSync(original);
+
+        expect(
+          () => process.updateRootPubspecSync(packageName: 'any'),
+          throwsException,
+        );
+        try {
+          process.updateRootPubspecSync(packageName: 'any');
+        } catch (e) {
+          expect(e.toString(), contains('missing "workspace:" section'));
+        }
+        expect(fs.file('pubspec.yaml').readAsStringSync(), equals(original));
+      },
+    );
+
+    test(
+      'malformed YAML is rejected with a distinct message before any mutation',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        const original = 'workspace:\n  - [unclosed\n';
+        fs.file('pubspec.yaml').writeAsStringSync(original);
+
+        try {
+          process.updateRootPubspecSync(packageName: 'any');
+          fail('expected updateRootPubspecSync to throw');
+        } catch (e) {
+          expect(e.toString(), contains('malformed YAML'));
+        }
+        expect(fs.file('pubspec.yaml').readAsStringSync(), equals(original));
+      },
+    );
+
+    test('scalar workspace field is rejected with a distinct message', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      const original = 'workspace: 123\n';
+      fs.file('pubspec.yaml').writeAsStringSync(original);
+
+      try {
+        process.updateRootPubspecSync(packageName: 'any');
+        fail('expected updateRootPubspecSync to throw');
+      } catch (e) {
+        expect(e.toString(), contains('must be a sequence of strings'));
+        expect(e.toString(), contains('got an integer'));
+      }
+      expect(fs.file('pubspec.yaml').readAsStringSync(), equals(original));
+    });
+
+    test('map workspace field is rejected with a distinct message', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      const original = 'workspace: {a: b}\n';
+      fs.file('pubspec.yaml').writeAsStringSync(original);
+
+      try {
+        process.updateRootPubspecSync(packageName: 'any');
+        fail('expected updateRootPubspecSync to throw');
+      } catch (e) {
+        expect(e.toString(), contains('must be a sequence of strings'));
+        expect(e.toString(), contains('got a map'));
+      }
+      expect(fs.file('pubspec.yaml').readAsStringSync(), equals(original));
+    });
+
+    test(
+      'list-of-non-strings workspace field is rejected with a distinct message',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        const original = 'workspace:\n  - "packages/core"\n  - 123\n';
+        fs.file('pubspec.yaml').writeAsStringSync(original);
+
+        try {
+          process.updateRootPubspecSync(packageName: 'any');
+          fail('expected updateRootPubspecSync to throw');
+        } catch (e) {
+          expect(e.toString(), contains('member #2 is not a string'));
+          expect(e.toString(), contains('got an integer'));
+        }
+        expect(fs.file('pubspec.yaml').readAsStringSync(), equals(original));
+      },
+    );
+
+    test(
+      'add-package preflight rejects an invalid workspace field before any scaffolding',
+      () {
+        final original = 'workspace: 123\n';
+        fs.file('pubspec.yaml').writeAsStringSync(original);
+        fs.directory('packages').createSync();
+
+        expect(
+          () => AddPackageRunner(
+            fs: fs,
+            runner: runner,
+            log: logger,
+          ).run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        expect(logs, contains(contains('Workspace root not found')));
+        expect(logs, contains(contains('must be a sequence of strings')));
+        verifyNever(() => runner.runSync(any(), any()));
+        expect(fs.file('pubspec.yaml').readAsStringSync(), equals(original));
+      },
+    );
+
+    test(
+      'workspace line with a bracketed comment is not treated as flow-style',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync('workspace:  # [draft]\n  - packages/core\n');
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        // The edit must keep the list block-style and insert the new member
+        // in the block list; the comment must be left byte-for-byte unchanged.
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+        expect(
+          after,
+          equals(
+            'workspace:  # [draft]\n'
+            '  - packages/core\n'
+            '  - packages/new_pkg\n',
+          ),
+        );
+
+        // The final file re-parses, with the new member present exactly once.
+        final manifest = parseWorkspaceManifest(after);
+        expect(manifest.members, equals(['packages/core', 'packages/new_pkg']));
+      },
+    );
+
+    test(
+      'flow-style list with a comment before the closing bracket stays valid',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync('workspace: [packages/a,  # note\n]\n');
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+
+        // The final file re-parses, with the new member present exactly once,
+        // and the comment content is intact.
+        expect(
+          after,
+          equals('workspace: [packages/a, packages/new_pkg  # note\n]\n'),
+        );
+        final manifest = parseWorkspaceManifest(after);
+        expect(manifest.members, equals(['packages/a', 'packages/new_pkg']));
+        expect(after, contains('# note'));
+      },
+    );
+  });
 }
