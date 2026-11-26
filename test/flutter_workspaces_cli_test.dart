@@ -645,6 +645,184 @@ workspace:
       expect(logs2, contains(contains('Cleanup also failed')));
       expect(logs2, contains(contains('cannot delete reserved directory')));
     });
+
+    test('failure while writing the package pubspec rolls back cleanly', () {
+      final mockFs = MockFileSystem();
+      final baseDir = MockDirectory();
+      final packagesDir = MockDirectory();
+      final reservedDir = MockDirectory();
+      final rootFile = MockFile();
+      final lockFile = MockFile();
+      final pkgPubspecFile = MockFile();
+      final targetFile = MockFile();
+      final targetLink = MockLink();
+      final runner2 = MockProcessRunner();
+      final logs2 = <String>[];
+      const originalContent = 'workspace:\n  - app\n';
+      const originalLockContent = 'ORIGINAL-LOCK\n';
+      var reservedDirExists = false;
+      String? restoredRootContent;
+      String? restoredLockContent;
+
+      when(() => mockFs.currentDirectory).thenReturn(baseDir);
+      when(() => baseDir.path).thenReturn('/work');
+      when(() => mockFs.file('pubspec.yaml')).thenReturn(rootFile);
+      when(() => rootFile.existsSync()).thenReturn(true);
+      when(() => rootFile.readAsStringSync()).thenReturn(originalContent);
+      when(() => rootFile.writeAsStringSync(any())).thenAnswer((invocation) {
+        restoredRootContent = invocation.positionalArguments[0] as String;
+      });
+      when(() => mockFs.directory('packages')).thenReturn(packagesDir);
+      when(() => packagesDir.existsSync()).thenReturn(true);
+      when(() => packagesDir.childFile(any())).thenReturn(targetFile);
+      when(() => targetFile.existsSync()).thenReturn(false);
+      when(() => packagesDir.childLink(any())).thenReturn(targetLink);
+      when(() => targetLink.existsSync()).thenReturn(false);
+      when(() => mockFs.directory('packages/new_pkg')).thenReturn(reservedDir);
+      when(() => reservedDir.path).thenReturn('packages/new_pkg');
+      when(() => reservedDir.existsSync()).thenAnswer((_) => reservedDirExists);
+      when(() => reservedDir.deleteSync(recursive: true)).thenAnswer((_) {
+        reservedDirExists = false;
+      });
+      when(
+        () => mockFs.file('packages/new_pkg/pubspec.yaml'),
+      ).thenReturn(pkgPubspecFile);
+      when(
+        () => pkgPubspecFile.writeAsStringSync(any()),
+      ).thenThrow(Exception('cannot write package pubspec'));
+      when(() => mockFs.file('pubspec.lock')).thenReturn(lockFile);
+      when(() => lockFile.existsSync()).thenReturn(true);
+      when(() => lockFile.readAsStringSync()).thenReturn(originalLockContent);
+      when(() => lockFile.writeAsStringSync(any())).thenAnswer((invocation) {
+        restoredLockContent = invocation.positionalArguments[0] as String;
+      });
+
+      when(() => runner2.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner2.runSync(
+          'flutter',
+          ['create', '--template=package', 'new_pkg'],
+          workingDirectory: 'packages',
+          runInShell: true,
+        ),
+      ).thenAnswer((_) {
+        // The mocked flutter create scaffolds the package directory, then
+        // the flow fails while rewriting the package pubspec.
+        reservedDirExists = true;
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      final runner = AddPackageRunner(
+        fs: mockFs,
+        runner: runner2,
+        log: logs2.add,
+      );
+
+      expect(
+        () => runner.run(['--name', 'new_pkg']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // The original error is reported, not hidden by a cleanup problem,
+      // and the success message is absent.
+      expect(logs2, contains(contains('cannot write package pubspec')));
+      expect(logs2, isNot(contains(contains('added successfully'))));
+
+      // The root manifest and lockfile are restored byte-identical.
+      expect(restoredRootContent, equals(originalContent));
+      expect(restoredLockContent, equals(originalLockContent));
+
+      // The reserved package directory is removed.
+      expect(reservedDirExists, isFalse);
+      verify(() => reservedDir.deleteSync(recursive: true)).called(1);
+    });
+
+    test('creation failure (flutter create nonzero exit) leaves the workspace '
+        'clean and a clean retry succeeds, registering the package once', () {
+      const originalManifest = 'workspace:\n  - app\n  - packages/core\n';
+      const originalLock = 'ORIGINAL-LOCK\n';
+      fs.file('pubspec.yaml').writeAsStringSync(originalManifest);
+      fs.file('pubspec.lock').writeAsStringSync(originalLock);
+      fs.directory('packages').createSync();
+
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+
+      var failCreate = true;
+      when(
+        () => runner.runSync(
+          'flutter',
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.contains('create')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          // Partial scaffold: the directory and an artifact are left behind
+          // before the command fails.
+          fs.directory(path).createSync(recursive: true);
+          if (failCreate) {
+            return ProcessRunnerResult(
+              exitCode: 2,
+              stdout: 'package create failed',
+              stderr: '',
+            );
+          }
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      // First attempt: flutter create fails partway through the scaffold.
+      expect(
+        () => AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // The workspace is back in a clean state.
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals(originalManifest),
+      );
+      expect(fs.file('pubspec.lock').readAsStringSync(), equals(originalLock));
+      expect(fs.directory('packages/new_pkg').existsSync(), isFalse);
+
+      // Clean retry: every step succeeds.
+      failCreate = false;
+      expect(
+        () => AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']),
+        returnsNormally,
+      );
+
+      expect(fs.file('packages/new_pkg/pubspec.yaml').existsSync(), isTrue);
+      final manifest = fs.file('pubspec.yaml').readAsStringSync();
+      expect('packages/new_pkg'.allMatches(manifest).length, equals(1));
+    });
   });
 
   group('AddPackageRunner', () {
