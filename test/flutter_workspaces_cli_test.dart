@@ -1,9 +1,18 @@
+import 'package:file/file.dart';
 import 'package:file/memory.dart';
 import 'package:flutter_workspaces_cli/flutter_workspaces_cli.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:test/test.dart';
 
 class MockProcessRunner extends Mock implements ProcessRunner {}
+
+class MockFileSystem extends Mock implements FileSystem {}
+
+class MockDirectory extends Mock implements Directory {}
+
+class MockFile extends Mock implements File {}
+
+class MockLink extends Mock implements Link {}
 
 void main() {
   late MemoryFileSystem fs;
@@ -254,7 +263,10 @@ workspace:
       addPackageRunner.run(['--name', 'new_pkg']);
 
       expect(fs.file('packages/new_pkg/pubspec.yaml').existsSync(), isTrue);
-      expect(fs.file('pubspec.yaml').readAsStringSync(), contains('- packages/new_pkg'));
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        contains('- packages/new_pkg'),
+      );
       expect(logs, contains(contains('Package "new_pkg" added successfully!')));
     });
 
@@ -335,6 +347,290 @@ workspace:
       }
 
       expect(fs.directory('/test/test_app_workspaces').existsSync(), isTrue);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Issue #11: protect existing workspace directories during setup and rollback.
+  // ---------------------------------------------------------------------------
+  group('CommonProcess.revertAllProcesses (Issue #11: scoped rollback)', () {
+    test(
+      'surfaces a cleanup error (returns it) instead of swallowing/throwing',
+      () {
+        final mockFs = MockFileSystem();
+        final mockDir = MockDirectory();
+
+        when(() => mockDir.existsSync()).thenReturn(true);
+        when(() => mockDir.path).thenReturn('/work/app_workspaces');
+        when(() => mockDir.deleteSync(recursive: true)).thenAnswer((_) {
+          throw Exception('cannot delete reserved directory');
+        });
+
+        final common = CommonProcess(fs: mockFs, runner: runner, log: logger);
+
+        // The cleanup error must be returned (surfaced) rather than thrown,
+        // so the original failure can be reported alongside it.
+        final cleanupError = common.revertAllProcesses(
+          reservedDirectory: mockDir,
+        );
+
+        expect(cleanupError, isNotNull);
+        expect(cleanupError, isA<Exception>());
+        expect(logs, contains(contains('Failed to clean up')));
+      },
+    );
+
+    test('removes only the exact reserved directory when cleanup succeeds', () {
+      final common = CommonProcess(fs: fs, runner: runner, log: logger);
+      final reserved = fs.directory('/work/app_workspaces')
+        ..createSync(recursive: true);
+      final sibling = fs.file('/work/sibling.txt')..createSync();
+
+      final cleanupError = common.revertAllProcesses(
+        reservedDirectory: reserved,
+      );
+
+      expect(cleanupError, isNull);
+      expect(fs.directory('/work/app_workspaces').existsSync(), isFalse);
+      // A sibling directory/file is never touched.
+      expect(sibling.existsSync(), isTrue);
+      expect(fs.directory('/work').existsSync(), isTrue);
+    });
+  });
+
+  group('SetupRunner (Issue #11: workspace protection)', () {
+    test('(a) a pre-existing target is rejected, untouched, and runs no '
+        'Flutter/Dart command', () {
+      final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+
+      // A pre-existing workspace with a user file at the target path.
+      final userFile = fs.file('/work/my_app_workspaces/config.yaml');
+      userFile.createSync(recursive: true);
+      userFile.writeAsStringSync('user: data\n');
+
+      expect(
+        () => setupRunner.run(['--name', 'my_app']),
+        throwsA(isA<ExitException>()),
+      );
+
+      // The existing workspace and its user file are left untouched.
+      expect(fs.directory('/work/my_app_workspaces').existsSync(), isTrue);
+      expect(
+        fs.file('/work/my_app_workspaces/config.yaml').readAsStringSync(),
+        equals('user: data\n'),
+      );
+
+      // No Flutter/Dart process was invoked for the rejected attempt.
+      verifyNever(() => runner.runSync('flutter', any()));
+      verifyNever(() => runner.runSync('dart', any()));
+      expect(logs, contains(contains('already exists')));
+    });
+
+    test('(b) a partial scaffold removes only the reserved dir, preserves the '
+        'invocation dir, and restores the working directory', () {
+      final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+
+      // A sibling the rollback must NOT remove.
+      fs.file('/work/keep_me.txt').createSync();
+
+      when(
+        () => runner.runSync('flutter', ['--version']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      // The Flutter app scaffold fails mid-way, forcing a rollback.
+      when(
+        () => runner.runSync(
+          'flutter',
+          ['create', 'partial_app'],
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenThrow(Exception('flutter create failed'));
+
+      expect(
+        () => setupRunner.run(['--name', 'partial_app']),
+        throwsA(isA<ExitException>()),
+      );
+
+      // Only the reserved workspace directory was removed.
+      expect(
+        fs.directory('/work/partial_app_workspaces').existsSync(),
+        isFalse,
+      );
+
+      // The invocation directory and its sibling are preserved.
+      expect(fs.directory('/work').existsSync(), isTrue);
+      expect(fs.file('/work/keep_me.txt').existsSync(), isTrue);
+
+      // The working directory was restored to the invocation directory.
+      expect(fs.currentDirectory.path, equals('/work'));
+    });
+
+    test('(c) a cleanup failure is surfaced alongside the original failure, '
+        'not swallowed', () {
+      final mockFs = MockFileSystem();
+      final baseDir = MockDirectory();
+      final reservedDir = MockDirectory();
+      final childFile = MockFile();
+      final childLink = MockLink();
+      final runner2 = MockProcessRunner();
+      final logs2 = <String>[];
+
+      // currentDirectory reads return baseDir; the restore setter is a no-op on
+      // the mock, so the rollback path exercises without touching it.
+      when(() => mockFs.currentDirectory).thenReturn(baseDir);
+
+      when(
+        () => baseDir.childDirectory('compete_app_workspaces'),
+      ).thenReturn(reservedDir);
+      when(() => baseDir.childFile(any())).thenReturn(childFile);
+      when(() => baseDir.childLink(any())).thenReturn(childLink);
+      when(() => baseDir.path).thenReturn('/work');
+      when(() => childFile.existsSync()).thenReturn(false);
+      when(() => childLink.existsSync()).thenReturn(false);
+
+      // The reserved directory is created on the happy path and then cannot be
+      // deleted, so rollback surfaces a cleanup error.
+      var reservedCreated = false;
+      when(() => reservedDir.existsSync()).thenAnswer((_) => reservedCreated);
+      when(() => reservedDir.createSync()).thenAnswer((_) {
+        reservedCreated = true;
+      });
+      when(() => reservedDir.absolute).thenReturn(reservedDir);
+      when(() => reservedDir.path).thenReturn('/work/compete_app_workspaces');
+      when(
+        () => reservedDir.deleteSync(recursive: true),
+      ).thenThrow(Exception('cannot delete reserved directory'));
+
+      when(
+        () => runner2.runSync('flutter', ['--version']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+      when(() => runner2.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      // The app scaffold fails mid-way, forcing a rollback that then fails too.
+      when(
+        () => runner2.runSync(
+          'flutter',
+          ['create', 'compete_app'],
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenThrow(Exception('flutter create failed'));
+
+      final setupRunner = SetupRunner(
+        fs: mockFs,
+        runner: runner2,
+        log: logs2.add,
+      );
+
+      expect(
+        () => setupRunner.run(['--name', 'compete_app']),
+        throwsA(isA<ExitException>()),
+      );
+
+      // Both the original failure and the cleanup failure are reported.
+      expect(logs2, contains(contains('Failed to create Flutter app')));
+      expect(logs2, contains(contains('Cleanup also failed')));
+      expect(logs2, contains(contains('cannot delete reserved directory')));
+    });
+
+    test('(d) two attempts for the same name: exactly one succeeds, the '
+        'other is rejected', () {
+      // Attempt 1 succeeds and populates the workspace.
+      final runner1 = MockProcessRunner();
+      final logs1 = <String>[];
+
+      when(
+        () => runner1.runSync('flutter', ['--version']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+      when(() => runner1.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner1.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final executable = invocation.positionalArguments[0] as String;
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            !args.contains('--template=package')) {
+          final appName = args.last;
+          fs.directory('$appName/lib').createSync(recursive: true);
+        }
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            args.contains('--template=package')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+
+      final setupRunner1 = SetupRunner(fs: fs, runner: runner1, log: logs1.add);
+      setupRunner1.run(['--name', 'compete_app']);
+
+      final reserved = fs.directory('/work/compete_app_workspaces');
+      expect(reserved.existsSync(), isTrue);
+      expect(
+        fs.file('/work/compete_app_workspaces/pubspec.yaml').existsSync(),
+        isTrue,
+      );
+
+      // Attempt 2 reuses the same name; the target is now occupied.
+      final runner2 = MockProcessRunner();
+      final logs2 = <String>[];
+      fs.currentDirectory = initialDir;
+
+      final setupRunner2 = SetupRunner(fs: fs, runner: runner2, log: logs2.add);
+
+      expect(
+        () => setupRunner2.run(['--name', 'compete_app']),
+        throwsA(isA<ExitException>()),
+      );
+
+      // Exactly one succeeded: attempt 1's content is intact and attempt 2 did
+      // not touch it or invoke any Flutter/Dart process.
+      expect(reserved.existsSync(), isTrue);
+      expect(
+        fs.file('/work/compete_app_workspaces/pubspec.yaml').existsSync(),
+        isTrue,
+      );
+      verifyNever(() => runner2.runSync('flutter', any()));
+      verifyNever(() => runner2.runSync('dart', any()));
     });
   });
 }

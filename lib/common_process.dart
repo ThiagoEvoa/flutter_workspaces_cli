@@ -28,27 +28,43 @@ class CommonProcess {
     return fs.currentDirectory;
   }
 
-  /// Attempts to remove the created workspace folder when reverting.
+  /// Removes the exact [reservedDirectory] reserved for this invocation when a
+  /// setup is rolled back.
+  ///
+  /// The deletion is **scoped** to the single directory that
+  /// [WorkspaceProcess.createWorkspaceFolderSync] reserved for this run: it
+  /// never deletes by project name and never touches the invocation directory or
+  /// any sibling. Deletion goes through the injected [FileSystem] (cross-platform)
+  /// rather than a platform-specific `rm -rf` command, so rollback behaves the
+  /// same on macOS, Linux, and Windows.
   ///
   /// Parameters:
-  /// - `initialDirectory`: the directory that was current before scaffolding.
-  /// - `projectName`: the base project name used to determine the workspace folder.
+  /// - `reservedDirectory`: the absolute [Directory] reserved for this run. This
+  ///   is the *only* path that may be removed.
   ///
-  /// Throws:
-  /// - [Exception] with message `⚠️ Failed to revert workspace processes` on failure.
-  void revertAllProcesses({
-    required Directory initialDirectory,
-    required String projectName,
-  }) {
+  /// Returns:
+  /// - The cleanup error that occurred, or `null` when the directory was removed
+  ///   successfully (or was already gone). The caller surfaces the returned error
+  ///   *alongside* the original failure so that neither error hides the other.
+  Object? revertAllProcesses({required Directory reservedDirectory}) {
     try {
-      runner.runSync(
-        'rm',
-        ['-rf', '${projectName}_workspaces'],
-        workingDirectory: initialDirectory.path,
-        runInShell: true,
+      log(
+        '🧹 Cleaning up reserved workspace folder: ${reservedDirectory.path}...',
       );
-    } catch (_) {
-      throw Exception('⚠️ Failed to revert workspace processes');
+      if (reservedDirectory.existsSync()) {
+        reservedDirectory.deleteSync(recursive: true);
+        log('✅ Reserved workspace folder removed');
+        return null;
+      }
+      log(
+        'ℹ️ Reserved workspace folder no longer present; nothing to clean up',
+      );
+      return null;
+    } catch (e) {
+      // Do not hide the original failure: surface the cleanup error to the
+      // caller instead of throwing, so both errors can be reported together.
+      log('⚠️ Failed to clean up the reserved workspace folder: $e');
+      return e;
     }
   }
 
