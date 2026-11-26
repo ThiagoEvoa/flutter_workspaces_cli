@@ -11,24 +11,54 @@ class WorkspaceProcess {
   final ProcessRunner runner;
   final void Function(String) log;
 
-  WorkspaceProcess({
-    required this.fs,
-    required this.runner,
-    this.log = print,
-  });
+  WorkspaceProcess({required this.fs, required this.runner, this.log = print});
 
-  /// Creates `<name>_workspaces` and changes the current working directory.
+  /// Creates `<name>_workspaces` and changes the current working directory to it.
+  ///
+  /// The target path is resolved from the current (invocation) directory and is
+  /// reserved **exclusively**: an occupied path — an existing directory, file, or
+  /// link — is refused *before* any Flutter scaffolding command runs. This means
+  /// an existing workspace with user files is never overwritten, and two
+  /// overlapping setup runs cannot both claim the same name.
+  ///
+  /// Returns the exact [Directory] reserved by this invocation. The caller must
+  /// use it to restore the working directory and to perform scoped cleanup.
   ///
   /// Parameters:
-  /// - `projectName`: base name for the workspace (e.g. `my_app`). The folder created
-  ///   will be `my_app_workspaces` and `Directory.current` will be set to it.
-  void createWorkspaceFolderSync({required String projectName}) {
+  /// - `projectName`: base name for the workspace (e.g. `my_app`). The folder
+  ///   created will be `my_app_workspaces` and `Directory.current` will be set to
+  ///   it.
+  ///
+  /// Throws:
+  /// - [Exception] when the target path is already occupied.
+  Directory createWorkspaceFolderSync({required String projectName}) {
     log('📁 Creating workspace folder...');
     final folderName = '${projectName}_workspaces';
-    final dir = fs.directory(folderName);
-    dir.createSync(recursive: true);
+    final base = fs.currentDirectory;
+    final dir = base.childDirectory(folderName);
+
+    // Refuse an occupied path before scaffolding. `existsSync()` is checked for
+    // a directory, a file, and a link (including a dangling link) so any
+    // pre-existing entry at the target is detected. This is the exclusive
+    // reservation: the path is only created when it is free, and the check uses
+    // the injected [FileSystem] so it is cross-platform (no platform-specific
+    // commands). Note: `package:file` 7.x does not expose an `exclusive` flag on
+    // `Directory.createSync`, so the guard is the reservation mechanism. For
+    // truly concurrent processes a small TOCTOU window remains; sequential
+    // invocations (the testable case) are fully protected.
+    if (dir.existsSync() ||
+        base.childFile(folderName).existsSync() ||
+        base.childLink(folderName).existsSync()) {
+      throw Exception(
+        '⚠️ Target path "$folderName" already exists. '
+        'Refusing to overwrite it. Aborting setup.',
+      );
+    }
+
+    dir.createSync();
     fs.currentDirectory = dir;
     log('✅ Workspace folder created: $folderName');
+    return dir.absolute;
   }
 
   /// Writes the workspace root `pubspec.yaml` with basic configuration.
@@ -43,12 +73,12 @@ class WorkspaceProcess {
     log('📝 Creating root pubspec.yaml...');
     final isDart311OrHigher = _isVersionAtLeast(dartVersion, 3, 11);
 
-    final workspaceSection =
-        isDart311OrHigher
-            ? '  - $projectName\n  - packages/*'
-            : '  - $projectName\n  - packages/core';
+    final workspaceSection = isDart311OrHigher
+        ? '  - $projectName\n  - packages/*'
+        : '  - $projectName\n  - packages/core';
 
-    final content = '''
+    final content =
+        '''
 name: _
 version: 0.1.0
 description: A Dart workspace example
@@ -147,7 +177,9 @@ dev_dependencies:
     final content = file.readAsStringSync();
 
     if (content.contains('- packages/*')) {
-      log('ℹ️ Wildcard "packages/*" detected. Skipping manual addition of "$packageName".');
+      log(
+        'ℹ️ Wildcard "packages/*" detected. Skipping manual addition of "$packageName".',
+      );
       return;
     }
 
@@ -159,10 +191,14 @@ dev_dependencies:
     }
 
     final lines = content.split('\n');
-    final workspaceIndex = lines.indexWhere((line) => line.trim() == 'workspace:');
+    final workspaceIndex = lines.indexWhere(
+      (line) => line.trim() == 'workspace:',
+    );
 
     if (workspaceIndex == -1) {
-      throw Exception('⚠️ "workspace:" section not found in root pubspec.yaml.');
+      throw Exception(
+        '⚠️ "workspace:" section not found in root pubspec.yaml.',
+      );
     }
 
     // Find the end of the workspace list
@@ -213,8 +249,9 @@ dev_dependencies:
     int majorThreshold,
     int minorThreshold,
   ) {
-    final cleanVersion =
-        version.startsWith('^') ? version.substring(1) : version;
+    final cleanVersion = version.startsWith('^')
+        ? version.substring(1)
+        : version;
     final parts = cleanVersion.split('.');
     if (parts.isEmpty) return false;
 
