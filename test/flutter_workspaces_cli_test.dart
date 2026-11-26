@@ -220,6 +220,433 @@ workspace:
     });
   });
 
+  group('AddPackageRunner (Issue #13: rollback on failure)', () {
+    // A valid workspace root (manifest with a "workspace:" section and a
+    // "packages" directory) shared by most Issue #13 tests.
+    void stubSuccessfulFlutter() {
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          'flutter',
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.contains('create')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+    }
+
+    test(
+      'rejects an invalid root before scaffolding (no Flutter/Dart call)',
+      () {
+        // No pubspec.yaml at all.
+        expect(
+          () => AddPackageRunner(
+            fs: fs,
+            runner: runner,
+            log: logger,
+          ).run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>()),
+        );
+        expect(logs, contains(contains('Workspace root not found')));
+        verifyNever(() => runner.runSync(any(), any()));
+
+        // A pubspec.yaml without a "workspace:" section is also rejected.
+        fs.file('pubspec.yaml').writeAsStringSync('name: my_app\n');
+        fs.directory('packages').createSync();
+        logs.clear();
+        expect(
+          () => AddPackageRunner(
+            fs: fs,
+            runner: runner,
+            log: logger,
+          ).run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>()),
+        );
+        expect(logs, contains(contains('Workspace root not found')));
+        verifyNever(() => runner.runSync(any(), any()));
+      },
+    );
+
+    test('refuses an occupied target before scaffolding', () {
+      fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - app\n');
+      fs.directory('packages/new_pkg').createSync(recursive: true);
+      fs.file('packages/new_pkg/kept.txt').writeAsStringSync('keep me');
+
+      expect(
+        () => AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      expect(logs, contains(contains('already exists')));
+      // The existing package is untouched.
+      expect(
+        fs.file('packages/new_pkg/kept.txt').readAsStringSync(),
+        equals('keep me'),
+      );
+      verifyNever(() => runner.runSync(any(), any()));
+    });
+
+    test('failure in creation leaves root manifest and lockfile intact, and '
+        'removes the partial package directory', () {
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync('workspace:\n  - app\n  - packages/core\n');
+      fs.file('pubspec.lock').writeAsStringSync('ORIGINAL-LOCK\n');
+      fs.directory('packages').createSync();
+
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          'flutter',
+          ['create', '--template=package', 'new_pkg'],
+          workingDirectory: 'packages',
+          runInShell: true,
+        ),
+      ).thenAnswer((_) {
+        // Partial scaffold: the directory and an artifact are left behind
+        // before the command fails.
+        fs.directory('packages/new_pkg').createSync(recursive: true);
+        fs.file('packages/new_pkg/artifact.txt').writeAsStringSync('x');
+        return ProcessRunnerResult(
+          exitCode: 2,
+          stdout: 'package create failed',
+          stderr: '',
+        );
+      });
+
+      expect(
+        () => AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // The root manifest and lockfile are unchanged.
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals('workspace:\n  - app\n  - packages/core\n'),
+      );
+      expect(
+        fs.file('pubspec.lock').readAsStringSync(),
+        equals('ORIGINAL-LOCK\n'),
+      );
+      // The partial package directory is removed.
+      expect(fs.directory('packages/new_pkg').existsSync(), isFalse);
+    });
+
+    test('failure in pub get leaves manifest and lockfile intact and allows a '
+        'clean retry', () {
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync('workspace:\n  - app\n  - packages/core\n');
+      fs.file('pubspec.lock').writeAsStringSync('ORIGINAL-LOCK\n');
+      fs.directory('packages').createSync();
+
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          'flutter',
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.contains('create')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+      when(
+        () => runner.runSync('flutter', ['pub', 'get'], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(exitCode: 2, stdout: 'pub get failed', stderr: ''),
+      );
+
+      // First attempt fails in dependency resolution.
+      expect(
+        () => AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // Rollback restores the original manifest and lockfile, and removes the
+      // created package directory.
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals('workspace:\n  - app\n  - packages/core\n'),
+      );
+      expect(
+        fs.file('pubspec.lock').readAsStringSync(),
+        equals('ORIGINAL-LOCK\n'),
+      );
+      expect(fs.directory('packages/new_pkg').existsSync(), isFalse);
+
+      // Clean retry succeeds (the reserved path is free again).
+      when(
+        () => runner.runSync('flutter', ['pub', 'get'], runInShell: true),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+
+      expect(
+        () => AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']),
+        returnsNormally,
+      );
+
+      expect(fs.file('packages/new_pkg/pubspec.yaml').existsSync(), isTrue);
+      final manifest = fs.file('pubspec.yaml').readAsStringSync();
+      final occurrences = 'packages/new_pkg'.allMatches(manifest).length;
+      expect(occurrences, equals(1));
+    });
+
+    test('explicit member list: successful addition registers the package '
+        'exactly once', () {
+      fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app\n');
+      fs.directory('packages').createSync();
+      stubSuccessfulFlutter();
+
+      AddPackageRunner(
+        fs: fs,
+        runner: runner,
+        log: logger,
+      ).run(['--name', 'new_pkg']);
+
+      final manifest = fs.file('pubspec.yaml').readAsStringSync();
+      expect('packages/new_pkg'.allMatches(manifest).length, equals(1));
+      expect(manifest, contains('- packages/new_pkg'));
+      expect(logs, contains(contains('added successfully')));
+    });
+
+    test(
+      'explicit member list: already-registered package is not duplicated',
+      () {
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync(
+              'workspace:\n  - my_app\n  - packages/new_pkg\n',
+            );
+        fs.directory('packages').createSync();
+        stubSuccessfulFlutter();
+
+        AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']);
+
+        final manifest = fs.file('pubspec.yaml').readAsStringSync();
+        // No duplicate entry was appended.
+        expect('packages/new_pkg'.allMatches(manifest).length, equals(1));
+        expect(logs, contains(contains('already in the workspace')));
+      },
+    );
+
+    test('wildcard workspace: rollback leaves the root manifest unchanged, '
+        'removes the package directory, and restores the lockfile', () {
+      fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - packages/*\n');
+      fs.file('pubspec.lock').writeAsStringSync('ORIGINAL-LOCK\n');
+      fs.directory('packages').createSync();
+
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          'flutter',
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.contains('create')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+      when(
+        () => runner.runSync('flutter', ['pub', 'get'], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(exitCode: 2, stdout: 'pub get failed', stderr: ''),
+      );
+
+      expect(
+        () => AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // Root manifest unchanged (no manual entry existed for the wildcard).
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals('workspace:\n  - packages/*\n'),
+      );
+      // Lockfile restored to its original content.
+      expect(
+        fs.file('pubspec.lock').readAsStringSync(),
+        equals('ORIGINAL-LOCK\n'),
+      );
+      // The new package directory is removed.
+      expect(fs.directory('packages/new_pkg').existsSync(), isFalse);
+    });
+
+    test('wildcard workspace: successful addition does not append a manual '
+        'entry', () {
+      fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - packages/*\n');
+      fs.directory('packages').createSync();
+      stubSuccessfulFlutter();
+
+      AddPackageRunner(
+        fs: fs,
+        runner: runner,
+        log: logger,
+      ).run(['--name', 'new_pkg']);
+
+      final manifest = fs.file('pubspec.yaml').readAsStringSync();
+      expect(manifest, equals('workspace:\n  - packages/*\n'));
+      expect(logs, contains(contains('Wildcard')));
+    });
+
+    test('cleanup failure is reported alongside the original error, not '
+        'swallowed', () {
+      final mockFs = MockFileSystem();
+      final baseDir = MockDirectory();
+      final packagesDir = MockDirectory();
+      final reservedDir = MockDirectory();
+      final rootFile = MockFile();
+      final targetFile = MockFile();
+      final targetLink = MockLink();
+      final lockFile = MockFile();
+      final runner2 = MockProcessRunner();
+      final logs2 = <String>[];
+
+      when(() => mockFs.currentDirectory).thenReturn(baseDir);
+      when(() => baseDir.path).thenReturn('/work');
+      when(() => mockFs.file('pubspec.yaml')).thenReturn(rootFile);
+      when(() => rootFile.existsSync()).thenReturn(true);
+      when(
+        () => rootFile.readAsStringSync(),
+      ).thenReturn('workspace:\n  - app\n');
+      when(() => mockFs.directory('packages')).thenReturn(packagesDir);
+      when(() => packagesDir.existsSync()).thenReturn(true);
+      when(() => targetFile.existsSync()).thenReturn(false);
+      when(() => targetLink.existsSync()).thenReturn(false);
+      when(() => packagesDir.childFile(any())).thenReturn(targetFile);
+      when(() => packagesDir.childLink(any())).thenReturn(targetLink);
+      var reservedCreated = false;
+      when(() => mockFs.directory('packages/new_pkg')).thenReturn(reservedDir);
+      when(() => reservedDir.path).thenReturn('packages/new_pkg');
+      when(() => reservedDir.existsSync()).thenAnswer((_) => reservedCreated);
+      when(
+        () => reservedDir.deleteSync(recursive: true),
+      ).thenThrow(Exception('cannot delete reserved directory'));
+      when(() => mockFs.file('pubspec.lock')).thenReturn(lockFile);
+      when(() => lockFile.existsSync()).thenReturn(false);
+
+      when(() => runner2.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner2.runSync(
+          'flutter',
+          ['create', '--template=package', 'new_pkg'],
+          workingDirectory: 'packages',
+          runInShell: true,
+        ),
+      ).thenAnswer((_) {
+        // The partial scaffold runs and leaves the directory behind, then
+        // fails — so rollback must attempt the scoped cleanup.
+        reservedCreated = true;
+        return ProcessRunnerResult(
+          exitCode: 2,
+          stdout: 'create failed',
+          stderr: '',
+        );
+      });
+
+      final runner = AddPackageRunner(
+        fs: mockFs,
+        runner: runner2,
+        log: logs2.add,
+      );
+
+      expect(
+        () => runner.run(['--name', 'new_pkg']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // Both the original failure and the cleanup failure are reported.
+      expect(logs2, contains(contains('create')));
+      expect(logs2, contains(contains('Cleanup also failed')));
+      expect(logs2, contains(contains('cannot delete reserved directory')));
+    });
+  });
+
   group('AddPackageRunner', () {
     test('run successfully adds a package', () {
       final addPackageRunner = AddPackageRunner(
@@ -276,6 +703,9 @@ workspace:
         runner: runner,
         log: logger,
       );
+
+      // A valid workspace root exists, but the "packages" directory is absent.
+      fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
 
       expect(
         () => addPackageRunner.run(['--name', 'new_pkg']),
