@@ -10,7 +10,7 @@ A command-line tool for scaffolding and managing monorepo-style Flutter workspac
 - 📱 **Flutter App Scaffolding**: Generates a main Flutter application that imports and uses the core package.
 - 🎯 **Workspace Resolution**: Configures `pubspec.yaml` files with workspace resolution for monorepo support.
 - 🔍 **Environment Validation**: Verifies that the Flutter toolchain on PATH bundles a supported Dart SDK (>= 3.6.0) and uses that same version for every generated manifest.
-- 📋 **Dependency Management**: Automatically adds common Flutter dependencies (cupertino_icons, flutter_lints, custom_lint).
+- 📋 **Dependency Management**: Automatically adds common Flutter dependencies (cupertino_icons, flutter_lints).
 - 🧹 **Error Handling**: Reverts workspace creation on failure for clean error states.
 - 🏗️ **SOLID Architecture**: Refactored to use Dependency Injection with `FileSystem` and `ProcessRunner` abstractions for better testability and maintainability.
 
@@ -74,11 +74,15 @@ my_app_workspaces/
 ├── my_app/                   # Main Flutter application
 │   ├── lib/
 │   │   └── main.dart        # Main entry point (imports core)
-│   ├── pubspec.yaml
+│   ├── test/
+│   │   └── widget_test.dart # Smoke test exercising the starter UI
+│   ├── pubspec.yaml         # App manifest (workspace resolution)
 └── packages/
     └── core/                 # Shared core package
         ├── lib/
         │   └── core.dart
+        ├── test/
+        │   └── core_test.dart
         └── pubspec.yaml
 ```
 
