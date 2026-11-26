@@ -110,13 +110,39 @@ my_app_workspaces/
 
 ### Running Tests
 
-Run the test suite to verify all functionality:
+Run the full local verification suite before opening a PR (the same commands CI runs):
 
 ```bash
+dart pub get --enforce-lockfile   # or: dart pub get
+dart format --set-exit-if-changed .
+dart analyze
 dart test
 ```
 
-The test suite leverages the `FileSystem` and `ProcessRunner` abstractions to provide 100% coverage without side effects on your local machine.
+The test suite leverages the `FileSystem` and `ProcessRunner` abstractions to exercise the CLI without side effects on your local machine. Tests run against mocked filesystem and process runners — no coverage metric is claimed.
+
+#### Dependency resolution
+
+The package supports Dart `>= 3.11.5` (per `pubspec.yaml` `environment.sdk`). The committed `pubspec.lock` is the resolution contract: CI installs the floor SDK (`3.11.5`) and the current stable (`3.14.0`) and resolves with `dart pub get --enforce-lockfile`, so the committed lockfile is expected to resolve at the floor — CI enforces it. If `--enforce-lockfile` fails locally, run `dart pub get`, review the change, and commit the updated lockfile along with your PR.
+
+#### Local smoke replication
+
+The CI `smoke` job scaffolds a workspace with the real CLI, then analyzes and tests the generated app, core package, and an added package. To replicate it locally in a clean directory:
+
+```bash
+rm -rf /tmp/issue17-smoke && mkdir -p /tmp/issue17-smoke && cd /tmp/issue17-smoke
+dart /path/to/flutter_workspaces_cli/bin/flutter_workspaces_cli.dart setup --name smoke_app
+cd /tmp/issue17-smoke/smoke_app_workspaces
+flutter pub get
+flutter analyze
+cd smoke_app && flutter test && cd ..   # generated app
+cd packages/core && flutter test && cd ../..   # core package
+dart /path/to/flutter_workspaces_cli/bin/flutter_workspaces_cli.dart add-package --name smoke_feature
+flutter pub get
+cd packages/smoke_feature && flutter test
+```
+
+> `flutter test` must run from the app directory or the package directory — running it from the workspace root fails with `Test directory "test" not found`.
 
 ## Contributing
 
