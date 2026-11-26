@@ -1,0 +1,101 @@
+name: Check
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check (Dart ${{ matrix.dart-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        dart-version: ["3.11.5", "3.14.0"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ matrix.dart-version }}
+
+      - name: Install dependencies (locked)
+        run: dart pub get --enforce-lockfile
+
+      - name: Check formatting
+        run: dart format --set-exit-if-changed .
+
+      - name: Analyze
+        run: dart analyze
+
+      - name: Test
+        run: dart test
+
+  smoke:
+    name: Smoke (${{ matrix.os }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: bash
+          - os: windows-latest
+            shell: pwsh
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.50.1"
+          channel: stable
+
+      - name: Resolve CLI dependencies
+        run: dart pub get --enforce-lockfile
+
+      - name: Create smoke temp directory
+        run: mkdir "${{ runner.temp }}/scaffold-smoke"
+
+      - name: Scaffold workspace (CLI setup)
+        working-directory: ${{ runner.temp }}/scaffold-smoke
+        run: dart run "${{ github.workspace }}/bin/flutter_workspaces_cli.dart" setup --name scaffold_smoke
+
+      - name: Resolve dependencies (generated workspace)
+        working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces
+        run: flutter pub get
+
+      - name: Analyze (generated workspace)
+        working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces
+        run: flutter analyze
+
+      - name: Test (generated app)
+        working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces/scaffold_smoke
+        run: flutter test
+
+      - name: Test (core package)
+        working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces/packages/core
+        run: flutter test
+
+      - name: Add package (CLI add-package)
+        working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces
+        run: dart run "${{ github.workspace }}/bin/flutter_workspaces_cli.dart" add-package --name smoke_feature
+
+      - name: Resolve dependencies (after add-package)
+        working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces
+        run: flutter pub get
+
+      - name: Test (smoke_feature package)
+        working-directory: ${{ runner.temp }}/scaffold-smoke/scaffold_smoke_workspaces/packages/smoke_feature
+        run: flutter test

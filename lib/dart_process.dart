@@ -68,7 +68,10 @@ class DartProcess {
   String? _machineVersion() {
     final Object? raw;
     try {
-      final result = runner.runSync('flutter', ['--version', '--machine']);
+      final result = runner.runSync('flutter', [
+        '--version',
+        '--machine',
+      ], runInShell: true);
       checkProcessResult(
         result: result,
         operation: 'flutter --version --machine',
@@ -96,7 +99,7 @@ class DartProcess {
   String? _textVersion() {
     final String out;
     try {
-      final result = runner.runSync('flutter', ['--version']);
+      final result = runner.runSync('flutter', ['--version'], runInShell: true);
       checkProcessResult(result: result, operation: 'flutter --version');
       out = '${result.stdout}\n${result.stderr}';
     } catch (e) {

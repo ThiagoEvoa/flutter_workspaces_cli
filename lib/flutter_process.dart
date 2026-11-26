@@ -22,7 +22,7 @@ class FlutterProcess {
   void isFlutterInstalledSync() {
     try {
       log('🔍 Checking if Flutter is installed...');
-      final result = runner.runSync('flutter', ['--version']);
+      final result = runner.runSync('flutter', ['--version'], runInShell: true);
       checkProcessResult(result: result, operation: 'flutter --version');
       log('✅ Flutter is installed');
     } catch (e) {

@@ -8,10 +8,7 @@ void main(List<String> arguments) {
   final processRunner = const RealProcessRunner();
 
   if (arguments.isNotEmpty && arguments.first == 'add-package') {
-    final addPackageRunner = AddPackageRunner(
-      fs: fs,
-      runner: processRunner,
-    );
+    final addPackageRunner = AddPackageRunner(fs: fs, runner: processRunner);
     try {
       addPackageRunner.run(arguments.sublist(1));
     } on ExitException catch (e) {
@@ -23,10 +20,7 @@ void main(List<String> arguments) {
     return;
   }
 
-  final runner = SetupRunner(
-    fs: fs,
-    runner: processRunner,
-  );
+  final runner = SetupRunner(fs: fs, runner: processRunner);
 
   try {
     runner.run(arguments);
