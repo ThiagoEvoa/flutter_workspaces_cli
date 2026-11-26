@@ -485,6 +485,45 @@ class WorkspaceProcess {
 
   WorkspaceProcess({required this.fs, required this.runner, this.log = print});
 
+  /// Refuses an occupied workspace target path without creating anything.
+  ///
+  /// Runs before any Flutter/Dart process or filesystem write: an occupied
+  /// path — an existing directory, file, or link — is refused here, so an
+  /// existing workspace with user files is never touched and no subprocess is
+  /// invoked for a rejected attempt. This is the read-only form of the same
+  /// reservation guard that [createWorkspaceFolderSync] enforces again when
+  /// reserving the folder.
+  ///
+  /// Parameters:
+  /// - `projectName`: base name for the workspace (e.g. `my_app`). The guarded
+  ///   target is `<name>_workspaces` in the current (invocation) directory.
+  ///
+  /// Throws:
+  /// - [Exception] when the target path is already occupied.
+  void assertWorkspaceFolderAvailableSync({required String projectName}) {
+    final folderName = '${projectName}_workspaces';
+    final base = fs.currentDirectory;
+    final dir = base.childDirectory(folderName);
+
+    // Refuse an occupied path before scaffolding. `existsSync()` is checked for
+    // a directory, a file, and a link (including a dangling link) so any
+    // pre-existing entry at the target is detected. This is the exclusive
+    // reservation: the path is only created when it is free, and the check uses
+    // the injected [FileSystem] so it is cross-platform (no platform-specific
+    // commands). Note: `package:file` 7.x does not expose an `exclusive` flag on
+    // `Directory.createSync`, so the guard is the reservation mechanism. For
+    // truly concurrent processes a small TOCTOU window remains; sequential
+    // invocations (the testable case) are fully protected.
+    if (dir.existsSync() ||
+        base.childFile(folderName).existsSync() ||
+        base.childLink(folderName).existsSync()) {
+      throw Exception(
+        '⚠️ Target path "$folderName" already exists. '
+        'Refusing to overwrite it. Aborting setup.',
+      );
+    }
+  }
+
   /// Creates `<name>_workspaces` and changes the current working directory to it.
   ///
   /// The target path is resolved from the current (invocation) directory and is
@@ -509,23 +548,11 @@ class WorkspaceProcess {
     final base = fs.currentDirectory;
     final dir = base.childDirectory(folderName);
 
-    // Refuse an occupied path before scaffolding. `existsSync()` is checked for
-    // a directory, a file, and a link (including a dangling link) so any
-    // pre-existing entry at the target is detected. This is the exclusive
-    // reservation: the path is only created when it is free, and the check uses
-    // the injected [FileSystem] so it is cross-platform (no platform-specific
-    // commands). Note: `package:file` 7.x does not expose an `exclusive` flag on
-    // `Directory.createSync`, so the guard is the reservation mechanism. For
-    // truly concurrent processes a small TOCTOU window remains; sequential
-    // invocations (the testable case) are fully protected.
-    if (dir.existsSync() ||
-        base.childFile(folderName).existsSync() ||
-        base.childLink(folderName).existsSync()) {
-      throw Exception(
-        '⚠️ Target path "$folderName" already exists. '
-        'Refusing to overwrite it. Aborting setup.',
-      );
-    }
+    // Re-check the reservation guard right before creating. The earlier
+    // assertWorkspaceFolderAvailableSync call is the read-only guard that runs
+    // before detection and any subprocess; this one is the final
+    // pre-scaffold exclusive guard at the point of creation.
+    assertWorkspaceFolderAvailableSync(projectName: projectName);
 
     dir.createSync();
     fs.currentDirectory = dir;
@@ -536,7 +563,9 @@ class WorkspaceProcess {
   /// Writes the workspace root `pubspec.yaml` with basic configuration.
   ///
   /// Parameters:
-  /// - `dartVersion`: Dart SDK version constraint (e.g. `3.10.8`).
+  /// - `dartVersion`: the bare Dart SDK version (e.g. `3.10.8`) reported by
+  ///   the Flutter toolchain used by the CLI. The generated `environment.sdk`
+  ///   constraint is serialized exactly once as `sdk: ^<dartVersion>`.
   /// - `projectName`: the main application folder name included in the workspace.
   void createRootPubspecSync({
     required String dartVersion,

@@ -41,6 +41,11 @@ class PackageProcess {
   }
 
   /// Writes `packages/[packageName]/pubspec.yaml` configured for workspace resolution.
+  ///
+  /// Parameters:
+  /// - `dartVersion`: the bare Dart SDK version (e.g. `3.10.8`) reported by
+  ///   the Flutter toolchain used by the CLI. The generated `environment.sdk`
+  ///   constraint is serialized exactly once as `sdk: ^<dartVersion>`.
   void updatePubspecSync({
     required String packageName,
     required String dartVersion,
