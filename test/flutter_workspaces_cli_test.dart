@@ -527,6 +527,9 @@ void main() {
       final appContent = fs.file('app/pubspec.yaml').readAsStringSync();
       expect(appContent, contains('sdk: ^3.10.8'));
       expect(appContent, isNot(contains('^^')));
+      expect(appContent, contains('core:'));
+      expect(appContent, contains('path: ../packages/core'));
+      expect(appContent, contains('material_ui:'));
     });
   });
 
@@ -676,6 +679,73 @@ workspace:
       expect(content, contains('name: my_pkg'));
       expect(content, contains('resolution: workspace'));
       expect(content, contains('sdk: ^3.6.0'));
+      expect(content, contains('flutter:'));
+      expect(content, contains('sdk: flutter'));
+      expect(content, contains('flutter_test:'));
+      expect(content, contains('flutter_lints:'));
+    });
+  });
+
+  group('FlutterAppProcess (Issue #16: generated app passes analyze and test)', () {
+    test(
+      'updateFlutterAppWidgetTestSync writes test/widget_test.dart exercising the starter UI',
+      () {
+        final process = FlutterAppProcess(fs: fs, runner: runner, log: logger);
+        fs.directory('my_app/test').createSync(recursive: true);
+
+        process.updateFlutterAppWidgetTestSync(projectName: 'my_app');
+
+        final file = fs.file('my_app/test/widget_test.dart');
+        expect(file.existsSync(), isTrue);
+        final content = file.readAsStringSync();
+        expect(content, contains('package:flutter_test/flutter_test.dart'));
+        expect(content, contains('package:material_ui/material_ui.dart'));
+        expect(content, contains('package:my_app/main.dart'));
+        expect(
+          content,
+          contains("testWidgets('Counter increments smoke test'"),
+        );
+        expect(content, contains('Icons.add'));
+        // The test file is written to the app's test/ directory, not elsewhere.
+        expect(fs.file('my_app/widget_test.dart').existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'updateFlutterAppWidgetSync writes a main.dart that uses the core package',
+      () {
+        final process = FlutterAppProcess(fs: fs, runner: runner, log: logger);
+        fs.directory('my_app/lib').createSync(recursive: true);
+
+        process.updateFlutterAppWidgetSync(projectName: 'my_app');
+
+        final file = fs.file('my_app/lib/main.dart');
+        expect(file.existsSync(), isTrue);
+        final content = file.readAsStringSync();
+        expect(content, contains('package:core/core.dart'));
+        expect(content, contains('material_ui'));
+        expect(content, contains('This is the flutter_workspaces_cli'));
+        expect(
+          content.contains('_count') || content.contains('Icons.add'),
+          isTrue,
+        );
+      },
+    );
+
+    test('updateAnalysisOptionsFileSync: legacy plugins removed', () {
+      final process = FlutterAppProcess(fs: fs, runner: runner, log: logger);
+      fs.directory('my_app').createSync(recursive: true);
+
+      process.updateAnalysisOptionsFileSync(projectName: 'my_app');
+
+      final file = fs.file('my_app/analysis_options.yaml');
+      expect(file.existsSync(), isTrue);
+      final content = file.readAsStringSync();
+      expect(content, isNot(contains('plugins:')));
+      expect(content, isNot(contains('custom_lint')));
+      expect(content, contains('exclude:'));
+      expect(content, contains('build/**'));
+      expect(content, contains('flutter_lints'));
     });
   });
 
@@ -1507,6 +1577,7 @@ workspace:
             !args.contains('--template=package')) {
           final appName = args.last;
           fs.directory('$appName/lib').createSync(recursive: true);
+          fs.directory('$appName/test').createSync(recursive: true);
         }
         if (executable == 'flutter' &&
             args.contains('create') &&
@@ -1790,6 +1861,7 @@ workspace:
             !args.contains('--template=package')) {
           final appName = args.last;
           fs.directory('$appName/lib').createSync(recursive: true);
+          fs.directory('$appName/test').createSync(recursive: true);
         }
         if (executable == 'flutter' &&
             args.contains('create') &&
@@ -1891,6 +1963,7 @@ workspace:
             !args.contains('--template=package')) {
           final appName = args.last;
           fs.directory('$appName/lib').createSync(recursive: true);
+          fs.directory('$appName/test').createSync(recursive: true);
         }
         if (executable == 'flutter' &&
             args.contains('create') &&
@@ -2259,7 +2332,6 @@ workspace:
             'add',
             '--dev',
             'flutter_lints',
-            'custom_lint',
           ], runInShell: true),
         ).thenReturn(
           ProcessRunnerResult(
@@ -2274,10 +2346,7 @@ workspace:
           fail('expected addingFlutterDevDependenciesSync to throw');
         } catch (e) {
           expect(e, isA<SubprocessException>());
-          expect(
-            e.toString(),
-            contains('flutter pub add --dev flutter_lints custom_lint'),
-          );
+          expect(e.toString(), contains('flutter pub add --dev flutter_lints'));
           expect(e.toString(), contains('exit code 2'));
           expect(e.toString(), contains('dev add failed'));
         }
@@ -2508,6 +2577,7 @@ workspace:
             !args.contains('--template=package')) {
           final appName = args.last;
           fs.directory('$appName/lib').createSync(recursive: true);
+          fs.directory('$appName/test').createSync(recursive: true);
         }
         if (executable == 'flutter' &&
             args.contains('create') &&
@@ -2541,7 +2611,6 @@ workspace:
           'add',
           '--dev',
           'flutter_lints',
-          'custom_lint',
         ], runInShell: true),
       );
       expect(logs, isNot(contains(contains('completed successfully'))));
@@ -2613,7 +2682,6 @@ workspace:
             'add',
             '--dev',
             'flutter_lints',
-            'custom_lint',
           ], runInShell: true),
         ).thenThrow(Exception('no such executable'));
 
@@ -2622,10 +2690,7 @@ workspace:
           fail('expected addingFlutterDevDependenciesSync to throw');
         } catch (e) {
           expect(e.toString(), contains('could not be started'));
-          expect(
-            e.toString(),
-            contains('flutter pub add --dev flutter_lints custom_lint'),
-          );
+          expect(e.toString(), contains('flutter pub add --dev flutter_lints'));
           expect(e.toString(), contains('no such executable'));
         }
       },

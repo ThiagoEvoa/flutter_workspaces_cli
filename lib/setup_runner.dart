@@ -60,6 +60,8 @@ class SetupRunner {
 
       flutterApp.updateFlutterAppWidgetSync(projectName: projectName);
 
+      flutterApp.updateFlutterAppWidgetTestSync(projectName: projectName);
+
       flutterApp.updateFlutterAppPubspecSync(
         dartVersion: dartVersion,
         projectName: projectName,

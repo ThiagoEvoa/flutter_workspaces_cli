@@ -56,12 +56,22 @@ class PackageProcess {
 name: $packageName
 description: "A new Flutter package project."
 version: 0.0.1
+homepage:
 
 environment:
   sdk: ^$dartVersion
   flutter: ">=1.17.0"
 
 resolution: workspace
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
 ''';
 
     final file = fs.file('packages/$packageName/pubspec.yaml');

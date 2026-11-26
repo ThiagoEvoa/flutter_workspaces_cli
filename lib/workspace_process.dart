@@ -658,18 +658,17 @@ dev_dependencies:
         'add',
         '--dev',
         'flutter_lints',
-        'custom_lint',
       ], runInShell: true);
       checkProcessResult(
         result: result,
-        operation: 'flutter pub add --dev flutter_lints custom_lint',
+        operation: 'flutter pub add --dev flutter_lints',
       );
       log('✅ Flutter dev dependencies added');
     } catch (e) {
       if (e is SubprocessException) rethrow;
       throw Exception(
         '⚠️ Failed to add Flutter dev dependencies: '
-        'flutter pub add --dev flutter_lints custom_lint could not be started '
+        'flutter pub add --dev flutter_lints could not be started '
         '(missing executable?): $e',
       );
     }
