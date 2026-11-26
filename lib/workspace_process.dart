@@ -199,6 +199,158 @@ int _findMatchingClosingBracket(String content, int openIndex) {
   return -1;
 }
 
+/// Finds the absolute content offset of the `[` that opens the workspace
+/// flow-style list. The scan is comment- and quote-aware: a `[` inside a
+/// comment or a quoted string is never treated as the opening bracket.
+/// Returns -1 when no top-level `[` is found within [endOffset].
+int _findTopLevelFlowOpen(String content, int startOffset, int endOffset) {
+  var inDouble = false;
+  var inSingle = false;
+  var i = startOffset;
+  while (i < endOffset) {
+    final c = content[i];
+    if (inDouble) {
+      if (c == '\\') {
+        i += 2;
+        continue;
+      }
+      if (c == '"') {
+        inDouble = false;
+      }
+      i++;
+      continue;
+    }
+    if (inSingle) {
+      if (c == "'") {
+        if (i + 1 < endOffset && content[i + 1] == "'") {
+          i += 2;
+          continue;
+        }
+        inSingle = false;
+      }
+      i++;
+      continue;
+    }
+    if (c == '"') {
+      inDouble = true;
+      i++;
+      continue;
+    }
+    if (c == "'") {
+      inSingle = true;
+      i++;
+      continue;
+    }
+    if (c == '#') {
+      // A comment runs to end of line; skip it entirely. The `[` inside a
+      // comment must never be mistaken for the flow-list opening bracket.
+      final prev = i == 0 ? '\n' : content[i - 1];
+      final startsComment =
+          prev == '\n' || prev == '\r' || prev == ' ' || prev == '\t';
+      if (startsComment) {
+        final commentEnd = content.indexOf(RegExp(r'[\r\n]'), i);
+        i = commentEnd == -1 || commentEnd >= endOffset
+            ? endOffset
+            : commentEnd;
+        continue;
+      }
+    }
+    if (c == '[') {
+      return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/// Returns the absolute offset just after the last member scalar inside the
+/// flow-style list opened at [openIndex] and closed at [closeIndex].
+///
+/// Comments and whitespace after the last member are ignored, and the
+/// returned position is never inside a comment or a quoted string. Returns
+/// -1 for an empty list (no member found).
+int _lastFlowMemberEnd(String content, int openIndex, int closeIndex) {
+  var lastContentPos = -1;
+  var inDouble = false;
+  var inSingle = false;
+  var i = openIndex + 1;
+  while (i < closeIndex) {
+    final c = content[i];
+    if (inDouble) {
+      if (c == '\\') {
+        i += 2;
+        continue;
+      }
+      if (c == '"') {
+        inDouble = false;
+        lastContentPos = i;
+      }
+      i++;
+      continue;
+    }
+    if (inSingle) {
+      if (c == "'") {
+        if (i + 1 < closeIndex && content[i + 1] == "'") {
+          i += 2;
+          continue;
+        }
+        inSingle = false;
+        lastContentPos = i;
+      }
+      i++;
+      continue;
+    }
+    if (c == '"') {
+      inDouble = true;
+      lastContentPos = i;
+      i++;
+      continue;
+    }
+    if (c == "'") {
+      inSingle = true;
+      lastContentPos = i;
+      i++;
+      continue;
+    }
+    if (c == '#') {
+      final prev = i == 0 ? '\n' : content[i - 1];
+      final startsComment =
+          prev == '\n' || prev == '\r' || prev == ' ' || prev == '\t';
+      if (startsComment) {
+        final commentEnd = content.indexOf(RegExp(r'[\r\n]'), i);
+        i = commentEnd == -1 ? closeIndex : commentEnd;
+        continue;
+      }
+      // A '#' inside a plain scalar is plain content.
+      lastContentPos = i;
+      i++;
+      continue;
+    }
+    if (!RegExp(r'\s').hasMatch(c)) {
+      lastContentPos = i;
+    }
+    i++;
+  }
+  if (lastContentPos == -1) return -1;
+  return lastContentPos + 1;
+}
+
+/// Returns the index of the first line where the workspace section ends:
+/// the first column-0, non-empty, non-comment line after the `workspace:`
+/// line. Returns `lines.length` when the section runs to the end of the file.
+int _workspaceSectionEnd(List<_Line> lines, int wsIndex) {
+  for (var i = wsIndex + 1; i < lines.length; i++) {
+    final raw = lines[i].text;
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) continue;
+    if (trimmed.startsWith('#')) continue;
+    if (!RegExp(r'^\s').hasMatch(raw)) {
+      return i;
+    }
+  }
+  return lines.length;
+}
+
 /// Returns the absolute content offset of line [index].
 int _lineOffset(List<_Line> lines, int index) {
   var offset = 0;
@@ -226,8 +378,18 @@ String insertWorkspaceMember(
     );
   }
 
-  if (lines[wsIndex].text.contains('[')) {
-    return _editFlowStyle(content, lines, wsIndex, packagePath);
+  // Detect the real flow-style list from the section body, not from a raw
+  // line substring: a `[` inside a comment or a quoted string on the
+  // workspace line must never be mistaken for the opening bracket.
+  final sectionEndIndex = _workspaceSectionEnd(lines, wsIndex);
+  final openIndex = _findTopLevelFlowOpen(
+    content,
+    _lineOffset(lines, wsIndex),
+    _lineOffset(lines, sectionEndIndex),
+  );
+
+  if (openIndex != -1) {
+    return _editFlowStyle(content, lines, wsIndex, packagePath, openIndex);
   }
   return _editBlockStyle(
     content,
@@ -239,32 +401,37 @@ String insertWorkspaceMember(
 }
 
 /// Surgical flow-style edit: inserts `, <packagePath>` (or `<packagePath>`
-/// for an empty list) just before the closing `]`. Existing members keep
-/// their original formatting; everything else is unchanged.
+/// for an empty list) right after the last member scalar, leaving the file
+/// valid. Existing members keep their original formatting — including any
+/// comments inside the list — everything else is unchanged.
 String _editFlowStyle(
   String content,
   List<_Line> lines,
   int wsIndex,
   String packagePath,
+  int openIndex,
 ) {
-  final startOffset = _lineOffset(lines, wsIndex);
-  final openIndex = content.indexOf('[', startOffset);
-  if (openIndex == -1) {
-    throw Exception(
-      '⚠️ Root workspace: could not locate the flow-style workspace list.',
-    );
-  }
   final closeIndex = _findMatchingClosingBracket(content, openIndex);
   if (closeIndex == -1) {
     throw Exception(
       '⚠️ Root workspace: could not locate the closing bracket of the workspace list.',
     );
   }
-  final existing = content.substring(openIndex + 1, closeIndex);
-  final newItem = existing.trim().isEmpty ? packagePath : ', $packagePath';
-  return content.substring(0, closeIndex) +
-      newItem +
-      content.substring(closeIndex);
+
+  final lastEnd = _lastFlowMemberEnd(content, openIndex, closeIndex);
+  if (lastEnd == -1) {
+    // Empty flow-style list: insert the new member right after the
+    // opening bracket.
+    return content.substring(0, openIndex + 1) +
+        packagePath +
+        content.substring(openIndex + 1);
+  }
+
+  // When the last member is followed by a comma (e.g. a trailing comma), the
+  // new member is inserted right after it without a repeated comma.
+  final lastChar = content[lastEnd - 1];
+  final insertion = lastChar == ',' ? ' $packagePath' : ', $packagePath';
+  return content.substring(0, lastEnd) + insertion + content.substring(lastEnd);
 }
 
 /// Surgical block-style edit: inserts a new `  - <packagePath>` line at the
@@ -280,17 +447,7 @@ String _editBlockStyle(
 ) {
   // Find the section end: the first column-0, non-empty, non-comment line
   // after the `workspace:` line.
-  var sectionEnd = lines.length;
-  for (var i = wsIndex + 1; i < lines.length; i++) {
-    final raw = lines[i].text;
-    final trimmed = raw.trim();
-    if (trimmed.isEmpty) continue;
-    if (trimmed.startsWith('#')) continue;
-    if (!RegExp(r'^\s').hasMatch(raw)) {
-      sectionEnd = i;
-      break;
-    }
-  }
+  final sectionEnd = _workspaceSectionEnd(lines, wsIndex);
 
   // Find the last member line within the section.
   var lastMember = -1;
@@ -563,6 +720,18 @@ dev_dependencies:
     }
 
     final newContent = insertWorkspaceMember(content, manifest, packagePath);
+    // Fail closed: never write a file whose workspace section cannot be
+    // re-parsed (e.g. a flow-style list corrupted by the edit).
+    try {
+      parseWorkspaceManifest(
+        newContent,
+        expectedRootPath: fs.currentDirectory.path,
+      );
+    } catch (e) {
+      throw Exception(
+        '⚠️ Root workspace: workspace edit did not produce a valid manifest. ($e)',
+      );
+    }
     file.writeAsStringSync(newContent);
     log('✅ Root pubspec.yaml updated');
   }

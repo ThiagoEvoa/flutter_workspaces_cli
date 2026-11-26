@@ -2335,5 +2335,57 @@ dependencies:
         expect(fs.file('pubspec.yaml').readAsStringSync(), equals(original));
       },
     );
+
+    test(
+      'workspace line with a bracketed comment is not treated as flow-style',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync('workspace:  # [draft]\n  - packages/core\n');
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        // The edit must keep the list block-style and insert the new member
+        // in the block list; the comment must be left byte-for-byte unchanged.
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+        expect(
+          after,
+          equals(
+            'workspace:  # [draft]\n'
+            '  - packages/core\n'
+            '  - packages/new_pkg\n',
+          ),
+        );
+
+        // The final file re-parses, with the new member present exactly once.
+        final manifest = parseWorkspaceManifest(after);
+        expect(manifest.members, equals(['packages/core', 'packages/new_pkg']));
+      },
+    );
+
+    test(
+      'flow-style list with a comment before the closing bracket stays valid',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync('workspace: [packages/a,  # note\n]\n');
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+
+        // The final file re-parses, with the new member present exactly once,
+        // and the comment content is intact.
+        expect(
+          after,
+          equals('workspace: [packages/a, packages/new_pkg  # note\n]\n'),
+        );
+        final manifest = parseWorkspaceManifest(after);
+        expect(manifest.members, equals(['packages/a', 'packages/new_pkg']));
+        expect(after, contains('# note'));
+      },
+    );
   });
 }
