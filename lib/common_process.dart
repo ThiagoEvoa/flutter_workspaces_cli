@@ -63,7 +63,7 @@ class CommonProcess {
     } catch (e) {
       // Do not hide the original failure: surface the cleanup error to the
       // caller instead of throwing, so both errors can be reported together.
-      log('⚠️ Failed to clean up the reserved workspace folder: $e');
+      // Logging happens once, in the caller, to avoid a duplicated message.
       return e;
     }
   }

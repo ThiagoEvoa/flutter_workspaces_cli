@@ -376,7 +376,7 @@ workspace:
 
         expect(cleanupError, isNotNull);
         expect(cleanupError, isA<Exception>());
-        expect(logs, contains(contains('Failed to clean up')));
+        expect(logs, isNot(contains(contains('Failed to clean up'))));
       },
     );
 
@@ -631,6 +631,116 @@ workspace:
       );
       verifyNever(() => runner2.runSync('flutter', any()));
       verifyNever(() => runner2.runSync('dart', any()));
+    });
+
+    test('(e) a successful setup restores the working directory to the '
+        'invocation directory (success path)', () {
+      final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+
+      when(
+        () => runner.runSync('flutter', ['--version']),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+      when(() => runner.runSync('dart', ['--version'])).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final executable = invocation.positionalArguments[0] as String;
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            !args.contains('--template=package')) {
+          final appName = args.last;
+          fs.directory('$appName/lib').createSync(recursive: true);
+        }
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            args.contains('--template=package')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      setupRunner.run(['--name', 'my_app']);
+
+      expect(fs.directory('/work/my_app_workspaces').existsSync(), isTrue);
+      // The working directory is restored to the invocation directory on the
+      // success path (finally block), not left inside the reserved folder.
+      expect(fs.currentDirectory.path, equals('/work'));
+    });
+
+    test('(f) a file at the target path is rejected, untouched, and runs no '
+        'Flutter/Dart command', () {
+      final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+
+      // A pre-existing FILE (not a directory) at the target path.
+      final userFile = fs.file('/work/my_app_workspaces');
+      userFile.createSync();
+      userFile.writeAsStringSync('not a directory\n');
+
+      expect(
+        () => setupRunner.run(['--name', 'my_app']),
+        throwsA(isA<ExitException>()),
+      );
+
+      // The existing file is left untouched.
+      expect(fs.file('/work/my_app_workspaces').existsSync(), isTrue);
+      expect(
+        fs.file('/work/my_app_workspaces').readAsStringSync(),
+        equals('not a directory\n'),
+      );
+
+      // No Flutter/Dart process was invoked for the rejected attempt.
+      verifyNever(() => runner.runSync('flutter', any()));
+      verifyNever(() => runner.runSync('dart', any()));
+      expect(logs, contains(contains('already exists')));
+    });
+
+    test('(g) a dangling link at the target path is rejected and runs no '
+        'Flutter/Dart command', () {
+      final setupRunner = SetupRunner(fs: fs, runner: runner, log: logger);
+
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+
+      // A dangling link (target does not exist) at the target path.
+      final link = fs.link('/work/my_app_workspaces');
+      link.createSync('/nonexistent/target');
+
+      expect(
+        () => setupRunner.run(['--name', 'my_app']),
+        throwsA(isA<ExitException>()),
+      );
+
+      // The dangling link is left in place.
+      expect(fs.link('/work/my_app_workspaces').existsSync(), isTrue);
+
+      // No Flutter/Dart process was invoked for the rejected attempt.
+      verifyNever(() => runner.runSync('flutter', any()));
+      verifyNever(() => runner.runSync('dart', any()));
+      expect(logs, contains(contains('already exists')));
     });
   });
 }
