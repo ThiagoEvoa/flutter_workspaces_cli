@@ -178,6 +178,7 @@ void main() {
 }
 ''';
 
+    fs.directory('$projectName/test').createSync(recursive: true);
     final file = fs.file('$projectName/test/widget_test.dart');
     file.writeAsStringSync(content);
     log('✅ Flutter app widget test updated');
@@ -227,7 +228,7 @@ flutter:
     log('✅ Flutter app pubspec.yaml updated');
   }
 
-  /// Writes an `analysis_options.yaml` that enables Flutter lints and plugin support.
+  /// Writes an `analysis_options.yaml` that enables Flutter lints.
   ///
   /// Parameters:
   /// - `projectName`: the application folder where the file will be written.

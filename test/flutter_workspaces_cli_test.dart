@@ -725,10 +725,8 @@ workspace:
         expect(content, contains('package:core/core.dart'));
         expect(content, contains('material_ui'));
         expect(content, contains('This is the flutter_workspaces_cli'));
-        expect(
-          content.contains('_count') || content.contains('Icons.add'),
-          isTrue,
-        );
+        expect(content, contains('_count'));
+        expect(content, contains('Icons.add'));
       },
     );
 
