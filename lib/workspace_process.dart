@@ -137,7 +137,7 @@ dev_dependencies:
       throw Exception(
         '⚠️ Failed to add Flutter dependencies: '
         'flutter pub add cupertino_icons could not be started '
-        '(missing executable?)',
+        '(missing executable?): $e',
       );
     }
   }
@@ -169,7 +169,7 @@ dev_dependencies:
       throw Exception(
         '⚠️ Failed to add Flutter dev dependencies: '
         'flutter pub add --dev flutter_lints custom_lint could not be started '
-        '(missing executable?)',
+        '(missing executable?): $e',
       );
     }
   }
@@ -191,7 +191,7 @@ dev_dependencies:
       if (e is SubprocessException) rethrow;
       throw Exception(
         '⚠️ Failed to run Flutter pub get: '
-        'flutter pub get could not be started (missing executable?)',
+        'flutter pub get could not be started (missing executable?): $e',
       );
     }
   }

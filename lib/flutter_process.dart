@@ -29,7 +29,7 @@ class FlutterProcess {
       if (e is SubprocessException) rethrow;
       throw Exception(
         'Flutter is not installed or not in PATH. Please install Flutter to use this CLI. '
-        '(flutter --version could not be started.)',
+        '(flutter --version could not be started. $e)',
       );
     }
   }

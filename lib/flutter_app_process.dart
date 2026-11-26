@@ -41,7 +41,7 @@ class FlutterAppProcess {
       if (e is SubprocessException) rethrow;
       throw Exception(
         'Failed to create Flutter app: flutter create $projectName could not be '
-        'started (missing executable?)',
+        'started (missing executable?): $e',
       );
     }
   }

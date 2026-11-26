@@ -35,7 +35,7 @@ class PackageProcess {
       throw Exception(
         '⚠️ Failed to create $packageName package: '
         'flutter create --template=package $packageName could not be started '
-        '(missing executable?)',
+        '(missing executable?): $e',
       );
     }
   }
