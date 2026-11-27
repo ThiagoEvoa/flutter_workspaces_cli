@@ -150,8 +150,19 @@ class FakeProcessRunner implements ProcessRunner {
 /// does. Driving the probe through the real create keeps the assertion honest on
 /// every platform without depending on a specific `dart:io` surface. Callers
 /// must restore the write bit with [restoreDirWritable] before the parent can be
-/// cleaned up.
+/// cleaned up. The function is self-cleaning: when the platform cannot enforce a
+/// non-writable directory the write protection it attempted is immediately
+/// cleared, so the directory is left writable on the caller's skip path too. A
+/// top-level registry ([_nonWritableDirs]) plus the suite `tearDown` provide a
+/// final safety net that clears any leftover write protection before the temp
+/// tree is deleted, on every exit path.
+final _nonWritableDirs = <io.Directory>[];
+
 bool makeRealDirNonWritable(io.Directory dir) {
+  // Track the directory so the suite teardown can guarantee write protection is
+  // cleared before a recursive delete, even on a path that returns early (e.g.
+  // a skipped test whose `try/finally` never runs).
+  _nonWritableDirs.add(dir);
   try {
     io.Process.runSync('chmod', ['500', dir.path]);
   } catch (_) {
@@ -161,8 +172,12 @@ bool makeRealDirNonWritable(io.Directory dir) {
   final probe = io.File('${dir.path}/.fws_write_probe');
   try {
     probe.createSync(exclusive: true);
-    // The write succeeded: not enforceable here.
+    // The write succeeded: not enforceable here. Clear any write protection we
+    // just attempted so the directory stays writable for teardown on this
+    // (skip) path — the caller's `try/finally` restore does not run when it
+    // returns early after `markTestSkipped`.
     probe.deleteSync();
+    restoreDirWritable(dir);
     return false;
   } catch (_) {
     // The write failed: the directory is genuinely non-writable.
@@ -173,11 +188,24 @@ bool makeRealDirNonWritable(io.Directory dir) {
 /// Restores the write bit on [dir] so its parent can be cleaned up. Best-effort:
 /// a failure to restore (e.g. no `chmod`) is swallowed because the parent
 /// directory remains writable regardless, so teardown can still delete the tree.
+///
+/// On Windows `chmod 500` sets the directory read-only attribute, which a
+/// recursive `deleteSync` cannot remove; the `attrib -R` fallback clears that
+/// attribute where `chmod` alone does not, so the temp tree is always deletable.
 void restoreDirWritable(io.Directory dir) {
   try {
     io.Process.runSync('chmod', ['700', dir.path]);
   } catch (_) {
     // No `chmod`; the parent stays writable, so cleanup is unaffected.
+  }
+  if (io.Platform.isWindows) {
+    try {
+      // Clear the Windows read-only attribute that `chmod 500` may have set,
+      // which a recursive delete cannot otherwise remove.
+      io.Process.runSync('attrib', ['-R', dir.path]);
+    } catch (_) {
+      // No `attrib` (or nothing to clear); the delete stays best-effort.
+    }
   }
 }
 
@@ -197,6 +225,16 @@ void main() {
     // Always restore the process working directory first, then delete the
     // temp directory — deleting a directory that is the process cwd fails.
     fs.currentDirectory = originalCwd;
+    // Final safety net: clear any write protection attempted by
+    // [makeRealDirNonWritable] before the recursive delete. This runs on every
+    // exit path — including the skip path, where a test returns early after
+    // `markTestSkipped` and its own `try/finally` restore never runs — so a
+    // read-only child directory (e.g. on Windows) is always cleared first and
+    // `deleteSync(recursive: true)` cannot fail with an access-denied error.
+    for (final dir in _nonWritableDirs) {
+      restoreDirWritable(dir);
+    }
+    _nonWritableDirs.clear();
     if (tempDir.existsSync()) {
       tempDir.deleteSync(recursive: true);
     }
