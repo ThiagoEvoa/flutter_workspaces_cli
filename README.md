@@ -127,6 +127,58 @@ my_app_workspaces/
 - `1`: Execution error (execution failed)
 - `64`: Usage error (missing/invalid name, unknown flag, stray argument)
 
+## Concurrency and parallel runs
+
+Every CLI invocation guards the paths it would otherwise touch with an **atomic reservation sentinel**, so two overlapping runs cannot both create the same workspace, both add the same package, or both rewrite the same workspace-wide files.
+
+### How the reservation works
+
+`package:file` 7.x exposes no atomic exclusive-create for directories or files: `Directory.createSync` is silent on an existing path, and `File.createSync(exclusive: true)` is dropped (the parameter is deliberately ignored). The one creation primitive through the abstraction that is atomic on both backends is **`Link.createSync`** — it throws when the path is already occupied. The reservations are therefore dangling sentinel **links** with the same name as the path they guard, created next to the real target:
+
+- **`setup`** — one sentinel next to the workspace folder it will create: `.<folderName>.reserved` in the invocation directory (e.g. `.my_app_workspaces.reserved` for `--name my_app`). The directory is created after the sentinel claim; an occupied target refuses before any Flutter/Dart subprocess runs. The directory is created only after the sentinel claim succeeds.
+- **`add-package`** — two sentinels, both released on every exit path:
+  - **Workspace-level lock**: `.flutter_workspaces_cli.lock` in the workspace root — serializes every workspace-wide write (root `pubspec.yaml`, `pubspec.lock`, the `packages/` directory) so concurrent add-package runs cannot race each other's writes.
+  - **Destination lock**: `packages/.<packageName>.reserved` in the workspace root — the per-package claim for the package being added (e.g. `packages/.my_feature.reserved` for `--name my_feature`).
+
+Acquiring the sentinel is compare-and-set: exactly one invocation can claim it. The loser fails fast — before scaffolding, manifest rewrites, or any filesystem effect — with a friendly error naming the path and the recovery steps. A successful run releases the sentinel before returning (and on rollback too), so a clean run leaves no trace. Release is best-effort: if deletion fails, the run is unaffected (the original error still surfaces) and the message is logged.
+
+### Fail-fast behavior
+
+A run that would start after another run already holds the claim stops immediately with an `⚠️` message naming what it would have done. Examples:
+
+```
+⚠️ Target path "my_app_workspaces" already exists. Refusing to overwrite it. Aborting setup.
+⚠️ Target path "my_app_workspaces" is already reserved or occupied. Refusing to overwrite it. Aborting setup. Details: ...
+⚠️ the workspace lock is already reserved: another flutter_workspaces_cli run is in progress, or a previous run was interrupted and left a reservation sentinel behind at "<workspace>/.flutter_workspaces_cli.lock". If no other run is in progress, remove the sentinel file manually (see the README "Retries and stale locks" section) and retry. Details: ...
+⚠️ Target directory "packages/my_feature" is already reserved: another flutter_workspaces_cli run is in progress, or a previous run was interrupted and left a reservation behind. Refusing to overwrite it. Aborting. Details: ...
+```
+
+The read-only guard and the atomic claim produce distinct, friendly messages — the guard fires before any subprocess runs, the claim closes the TOCTOU window between two concurrent runs.
+
+### Retries and stale locks
+
+The sentinel is deleted on success, on rollback, and on every exit path — but a crash or force-kill can leave it behind. A leftover sentinel does **not** block a different name: `.my_app_workspaces.reserved` blocks only `setup --name my_app`; a stale `.flutter_workspaces_cli.lock` blocks all add-package runs until removed.
+
+To clear a stale lock — **only when no other run is actually in progress** — delete the exact file:
+
+- `setup`: `.<folderName>.reserved` next to the target folder in the invocation directory (e.g. `.my_app_workspaces.reserved`).
+- `add-package`: `.flutter_workspaces_cli.lock` in the workspace root (workspace-wide), and/or `packages/.<packageName>.reserved` in the workspace root (per package).
+
+After removing the file, retry the command. If deletion is refused (e.g. another run is genuinely in progress, or files are missing), the release is skipped and the original error is still reported.
+
+### Windows requirement
+
+The sentinel is a **symlink** (via `Link.createSync` in `package:file` → `dart:io`). Creating a symlink on Windows requires **Windows Developer Mode or an elevated token** (`SeCreateSymbolicLinkPrivilege`). On a Windows machine or CI runner without that right, sentinel creation fails — the CLI reports the acquisition failure as a friendly `already reserved` error and refuses to proceed. The Windows CI legs (`Real-FS` job) verify the mechanism where the runner permits it; they are not a claim that the mechanism works on every Windows setup, only that the real-filesystem tests pass on the CI runners where symlink creation is permitted. macOS and Linux need no extra privilege.
+
+### Workspace-level serialization
+
+- `add-package` is serialized workspace-wide by `.flutter_workspaces_cli.lock`: the workspace root can only have one add-package run in progress, and two concurrent invocations for the same `--name` also fail fast against the per-destination sentinel.
+- `setup` is independent per folder name (no workspace-wide lock): two concurrent setups with different `--name` values never contend; same-name concurrent setups collide on the sentinel and exactly one wins.
+
+### Best-effort cleanup
+
+On normal completion both sentinels are deleted before the command returns; on failure the reserved directory is removed (scoped to the reservation this run made) and the sentinels are still released best-effort. A release failure is logged but never hides the run's original error. If a sentinel is left behind (crash, force-kill), it is a documented, recoverable leftover — remove the exact file above and retry.
+
 ## Releases
 
 Releases are published to [pub.dev](https://pub.dev/packages/flutter_workspaces_cli) by the maintainer, using a verified, tag-driven flow. Ordinary branch and PR checks are read-only: they validate that `pubspec.yaml` and the first line of `CHANGELOG.md` agree, and never create a tag or publish.

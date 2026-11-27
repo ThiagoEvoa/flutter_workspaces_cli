@@ -1,4 +1,5 @@
 import 'package:file/file.dart';
+import 'run_reservation.dart';
 import 'package_process.dart';
 import 'process_runner.dart';
 import 'dart_process.dart';
@@ -35,9 +36,25 @@ class AddPackageRunner {
     String? originalLockfileContent;
     bool lockfileExistedBefore = false;
     Directory? reservedDirectory;
+    RunReservation? workspaceLock;
+    RunReservation? destinationReservation;
 
     try {
       packageName = projectNameProcess.getProjectName(arguments: arguments);
+
+      // Acquire the workspace-level lock atomically BEFORE any state capture
+      // or filesystem effect. The lock is the mutual-exclusion guard for every
+      // workspace-wide resource the run touches: the root manifest, the lockfile,
+      // and the packages directory. Acquiring it before validation means a run
+      // that would otherwise fail fast never races a concurrent run's commit.
+      // A stale lock from an interrupted run is a documented, recoverable
+      // leftover (see README "Retries and stale locks").
+      workspaceLock = RunReservation.acquire(
+        fs: fs,
+        sentinelPath:
+            '${fs.currentDirectory.path}/.flutter_workspaces_cli.lock',
+        contextLabel: 'the workspace lock',
+      );
 
       // Validate the workspace root BEFORE any scaffolding command runs.
       // A missing manifest or a missing/invalid "workspace:" section leaves
@@ -84,11 +101,15 @@ class AddPackageRunner {
         );
       }
 
-      // Reserve the target package directory EXCLUSIVELY before generating
-      // any files. An occupied path — a directory, a file, or a link (including
-      // a dangling link) — is refused. `package:file` 7.x has no `exclusive`
-      // flag on `createSync`, so the `existsSync()` guard is the reservation
-      // mechanism (same pattern as the setup workspace reservation).
+      // Reserve the target package directory EXCLUSIVELY before generating any
+      // files. An occupied path — a directory, a file, or a link (including a
+      // dangling link) — is refused with the friendly error below. The atomic
+      // claim is a sentinel link created in the `packages` directory: creating
+      // the link is compare-and-set, so two concurrent invocations cannot both
+      // claim the same destination. `package:file` 7.x has no `exclusive` flag
+      // on `createSync` (both `Directory.createSync` and `File.createSync` are
+      // silent on an existing path), so the sentinel is the reservation
+      // mechanism; the friendly error below still fires for an occupied target.
       final targetPath = 'packages/$packageName';
       final targetDir = fs.directory(targetPath);
       final targetFile = packagesDir.childFile(packageName);
@@ -99,6 +120,23 @@ class AddPackageRunner {
         throw Exception(
           '⚠️ Target directory "$targetPath" already exists. '
           'Refusing to overwrite it. Aborting.',
+        );
+      }
+
+      final sentinelPath =
+          '${fs.currentDirectory.path}/packages/.$packageName.reserved';
+      try {
+        destinationReservation = RunReservation.acquire(
+          fs: fs,
+          sentinelPath: sentinelPath,
+          contextLabel: 'the destination package directory "$targetPath"',
+        );
+      } catch (e) {
+        throw Exception(
+          '⚠️ Target directory "$targetPath" is already reserved: another '
+          'flutter_workspaces_cli run is in progress, or a previous run was '
+          'interrupted and left a reservation behind. Refusing to overwrite it. '
+          'Aborting. Details: $e',
         );
       }
 
@@ -188,6 +226,27 @@ class AddPackageRunner {
         }
       }
       throw ExitException(1);
+    } finally {
+      // Release the destination reservation and the workspace lock on EVERY
+      // exit path — success, failure, rollback, and usage error — so the next
+      // run is never blocked by a claim this run no longer holds. Releases are
+      // best-effort (logged, not thrown): the original failure is never hidden.
+      final destination = destinationReservation;
+      if (destination != null) {
+        final releaseError = destination.release();
+        if (releaseError != null) {
+          errorLog(
+            '⚠️ Failed to release the destination package reservation: $releaseError',
+          );
+        }
+      }
+      final lock = workspaceLock;
+      if (lock != null) {
+        final releaseError = lock.release();
+        if (releaseError != null) {
+          errorLog('⚠️ Failed to release the workspace lock: $releaseError');
+        }
+      }
     }
   }
 }

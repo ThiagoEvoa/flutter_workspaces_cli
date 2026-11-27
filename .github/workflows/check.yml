@@ -37,6 +37,28 @@ jobs:
       - name: Test
         run: dart test
 
+  real-fs:
+    name: Real-FS (${{ matrix.os }} / Dart 3.12.0)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: "3.12.0"
+
+      - name: Install dependencies (locked)
+        run: dart pub get --enforce-lockfile
+
+      - name: Real-filesystem tests
+        run: dart test test/flutter_workspaces_cli_real_fs_test.dart --reporter expanded
+
   smoke:
     name: Smoke (${{ matrix.os }} / Flutter ${{ matrix.flutter-version }})
     needs: check

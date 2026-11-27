@@ -2,3 +2,6 @@
 # Created by `dart pub`
 .dart_tool/
 .DS_Store
+# Atomic-reservation sentinels left behind by interrupted CLI runs
+.flutter_workspaces_cli.lock
+.*.reserved

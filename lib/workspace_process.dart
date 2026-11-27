@@ -2,6 +2,7 @@ import 'package:file/file.dart';
 import 'package:yaml/yaml.dart';
 import 'dart_process.dart';
 import 'process_runner.dart';
+import 'run_reservation.dart';
 
 /// A validated root workspace manifest.
 ///
@@ -491,9 +492,9 @@ class WorkspaceProcess {
   /// Runs before any Flutter/Dart process or filesystem write: an occupied
   /// path — an existing directory, file, or link — is refused here, so an
   /// existing workspace with user files is never touched and no subprocess is
-  /// invoked for a rejected attempt. This is the read-only form of the same
-  /// reservation guard that [createWorkspaceFolderSync] enforces again when
-  /// reserving the folder.
+  /// invoked for a rejected attempt. This is the read-only, friendly early
+  /// check; [createWorkspaceFolderSync] performs the atomic claim (sentinel
+  /// link) before the directory is created.
   ///
   /// Parameters:
   /// - `projectName`: base name for the workspace (e.g. `my_app`). The guarded
@@ -508,13 +509,10 @@ class WorkspaceProcess {
 
     // Refuse an occupied path before scaffolding. `existsSync()` is checked for
     // a directory, a file, and a link (including a dangling link) so any
-    // pre-existing entry at the target is detected. This is the exclusive
-    // reservation: the path is only created when it is free, and the check uses
-    // the injected [FileSystem] so it is cross-platform (no platform-specific
-    // commands). Note: `package:file` 7.x does not expose an `exclusive` flag on
-    // `Directory.createSync`, so the guard is the reservation mechanism. For
-    // truly concurrent processes a small TOCTOU window remains; sequential
-    // invocations (the testable case) are fully protected.
+    // pre-existing entry at the target is detected. This is the friendly
+    // early guard only — it is deliberately not the atomic reservation. The
+    // atomic claim (a sentinel link, see [createWorkspaceFolderSync]) is what
+    // closes the TOCTOU window between two concurrent runs.
     if (dir.existsSync() ||
         base.childFile(folderName).existsSync() ||
         base.childLink(folderName).existsSync()) {
@@ -533,8 +531,19 @@ class WorkspaceProcess {
   /// an existing workspace with user files is never overwritten, and two
   /// overlapping setup runs cannot both claim the same name.
   ///
-  /// Returns the exact [Directory] reserved by this invocation. The caller must
-  /// use it to restore the working directory and to perform scoped cleanup.
+  /// The atomic claim is a **sentinel link** (`<base>/.<folderName>.reserved`)
+  /// created next to the target: `Link.createSync` is the one creation primitive
+  /// through `package:file` that is atomic on both backends — both
+  /// `Directory.createSync` and `File.createSync(exclusive: true)` are silent on
+  /// an existing path — so the sentinel is the reservation mechanism and the
+  /// `existsSync` guard is only the friendly early check. Exactly one invocation
+  /// can claim the sentinel, so the overlapping-runs race is eliminated even when
+  /// both runs pass the read-only guard.
+  ///
+  /// Returns a [ReservedWorkspace] holding the exact [Directory] reserved by this
+  /// invocation and the [RunReservation] sentinel, which the caller must release
+  /// on success and on every rollback path. The caller must use the directory to
+  /// restore the working directory and to perform scoped cleanup.
   ///
   /// Parameters:
   /// - `projectName`: base name for the workspace (e.g. `my_app`). The folder
@@ -542,8 +551,9 @@ class WorkspaceProcess {
   ///   it.
   ///
   /// Throws:
-  /// - [Exception] when the target path is already occupied.
-  Directory createWorkspaceFolderSync({required String projectName}) {
+  /// - [Exception] when the target path is already occupied or another run
+  ///   already holds the reservation sentinel.
+  ReservedWorkspace createWorkspaceFolderSync({required String projectName}) {
     log('📁 Creating workspace folder...');
     final folderName = '${projectName}_workspaces';
     final base = fs.currentDirectory;
@@ -552,13 +562,47 @@ class WorkspaceProcess {
     // Re-check the reservation guard right before creating. The earlier
     // assertWorkspaceFolderAvailableSync call is the read-only guard that runs
     // before detection and any subprocess; this one is the final
-    // pre-scaffold exclusive guard at the point of creation.
+    // pre-scaffold guard at the point of creation.
     assertWorkspaceFolderAvailableSync(projectName: projectName);
 
-    dir.createSync();
-    fs.currentDirectory = dir;
-    log('✅ Workspace folder created: $folderName');
-    return dir.absolute;
+    // Atomic reservation: create the sentinel link next to the target. If another
+    // run already holds the reservation (or a previous run was interrupted and
+    // left the sentinel behind), this throws before any directory is created.
+    final sentinelPath = '${base.path}/.$folderName.reserved';
+    final RunReservation reservation;
+    try {
+      reservation = RunReservation.acquire(
+        fs: fs,
+        sentinelPath: sentinelPath,
+        contextLabel: 'the workspace directory "$folderName"',
+      );
+    } catch (e) {
+      // Acquisition failed — map it to the same friendly "already exists" style
+      // error so an occupied path reports identically whether it was found by the
+      // read-only guard, by the sentinel claim, or both.
+      throw Exception(
+        '⚠️ Target path "$folderName" is already reserved or occupied. '
+        'Refusing to overwrite it. Aborting setup. Details: $e',
+      );
+    }
+
+    try {
+      dir.createSync();
+      fs.currentDirectory = dir;
+      log('✅ Workspace folder created: $folderName');
+      return ReservedWorkspace(
+        directory: dir.absolute,
+        reservation: reservation,
+      );
+    } catch (e) {
+      // Directory creation failed: release the sentinel so a later retry or a
+      // different invocation is not blocked by a stale claim of this run.
+      final releaseError = reservation.release();
+      if (releaseError != null) {
+        log('⚠️ Failed to release the workspace reservation: $releaseError');
+      }
+      rethrow;
+    }
   }
 
   /// Writes the workspace root `pubspec.yaml` with basic configuration.

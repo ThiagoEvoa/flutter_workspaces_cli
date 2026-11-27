@@ -3,6 +3,24 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:yaml/yaml.dart';
 
+/// The package root, resolved from this test file's own location
+/// (`test/publish_workflow_test.dart`), so the assertions are independent of
+/// the process working directory (the real-filesystem test group mutates
+/// `Directory.current`). `Platform.script` points at the compiled kernel
+/// dump under `dart test`, so the source URI is taken from the JIT stack
+/// trace's first frame instead — that frame is this file.
+String get packageRoot {
+  final st = StackTrace.current.toString();
+  final match = RegExp(r'\(file://([^)]+)\)').firstMatch(st);
+  if (match == null) {
+    throw StateError('could not resolve the package root from the stack trace');
+  }
+  // The frame keeps a `:line:column` suffix; strip it before converting.
+  final uriPath = match.group(1)!.replaceFirst(RegExp(r':(\d+):(\d+)$'), '');
+  final file = File(Uri.parse('file://$uriPath').toFilePath());
+  return file.parent.parent.absolute.path;
+}
+
 /// Offline structural assertions for the two publish workflows.
 ///
 /// `.github/workflows/publish.yml` (tag-driven, live) and
@@ -17,8 +35,14 @@ void main() {
 
   group('workflow fixtures', () {
     test('both workflow files exist and parse as YAML maps', () {
-      expect(File('.github/workflows/publish.yml').existsSync(), isTrue);
-      expect(File('.github/workflows/publish-test.yml').existsSync(), isTrue);
+      expect(
+        File('$packageRoot/.github/workflows/publish.yml').existsSync(),
+        isTrue,
+      );
+      expect(
+        File('$packageRoot/.github/workflows/publish-test.yml').existsSync(),
+        isTrue,
+      );
       expect(publish, isA<Map>());
       expect(testMode, isA<Map>());
     });
@@ -199,7 +223,7 @@ void main() {
 }
 
 Map<String, dynamic> _loadWorkflow(String filename) {
-  final file = File('.github/workflows/$filename');
+  final file = File('$packageRoot/.github/workflows/$filename');
   final doc = loadYaml(file.readAsStringSync());
   if (doc is! Map) {
     throw StateError(
