@@ -4,19 +4,27 @@
 // The mocked suite (test/flutter_workspaces_cli_test.dart) drives the CLI
 // against an in-memory FileSystem. THIS FILE is the compatibility boundary
 // for real filesystem semantics: package:file's LocalFileSystem on a temp
-// directory under the OS temp dir — real symlinks, real directories, real
+// directory under the OS temp dir — real files, real directories, real
 // path semantics — with the Flutter toolchain mocked exactly as in the
 // mocked tests (no real `flutter` subprocess runs, no real flutter anywhere).
 // The only real component is the filesystem.
 //
 // These tests exercise what memory-fs cannot cover:
-//  - the sentinel link is created by REAL symlinks (the atomic claim);
+//  - the sentinel is a REAL file created by an exclusive create (the atomic
+//    claim) and probed for as a file;
 //  - a dangling/broken symlink at a destination is detected and never
 //    deleted by rollback;
 //  - rollback against the real FS removes the reserved directory while
 //    leaving the invocation (parent) directory's files intact;
 //  - the workspace lock is held mid-run (observed inside the flutter
 //    subprocess hook) and released on completion.
+//
+// Issue #37: the claim moved from a symlink to an exclusive regular-file
+// create. On a real filesystem an existing entity (including a stale file
+// left by an interrupted run) at the sentinel path makes the exclusive
+// create fail; the CLI then treats it as a stale lock and recovers, so the
+// real-fs tests below create stale sentinels as *files* and probe for
+// *files*.
 import 'dart:convert';
 import 'dart:io' as io;
 
@@ -153,7 +161,7 @@ void main() {
         fs: fs,
         createHook: (_) {
           sentinelHeldDuringCreate = fs
-              .link(tempPath('.my_app_workspaces.reserved'))
+              .file(tempPath('.my_app_workspaces.reserved'))
               .existsSync();
         },
       );
@@ -191,7 +199,7 @@ void main() {
 
       // Sentinel released on success; the invocation-parent file is intact.
       expect(
-        fs.link(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        fs.file(tempPath('.my_app_workspaces.reserved')).existsSync(),
         isFalse,
       );
       expect(notesFile.readAsStringSync(), equals('keep me'));
@@ -232,7 +240,9 @@ void main() {
         ..writeAsStringSync('keep me');
       // Simulate an interrupted winner: the sentinel is left behind and the
       // workspace directory does not exist.
-      fs.link(tempPath('.my_app_workspaces.reserved')).createSync('reserved');
+      fs
+          .file(tempPath('.my_app_workspaces.reserved'))
+          .createSync(exclusive: true);
 
       final logs = <String>[];
       expect(
@@ -250,7 +260,7 @@ void main() {
       // Nothing was created; the stale sentinel is NOT deleted by the loser.
       expect(fs.directory('my_app_workspaces').existsSync(), isFalse);
       expect(
-        fs.link(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        fs.file(tempPath('.my_app_workspaces.reserved')).existsSync(),
         isTrue,
       );
       expect(notesFile.readAsStringSync(), equals('keep me'));
@@ -277,7 +287,7 @@ void main() {
       // app), the sentinel was released, and the parent file survives.
       expect(fs.directory('my_app_workspaces').existsSync(), isFalse);
       expect(
-        fs.link(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        fs.file(tempPath('.my_app_workspaces.reserved')).existsSync(),
         isFalse,
       );
       expect(notesFile.readAsStringSync(), equals('keep me'));
@@ -310,10 +320,10 @@ void main() {
           fs: fs,
           createHook: (_) {
             lockHeldDuringCreate = fs
-                .link(tempPath('.flutter_workspaces_cli.lock'))
+                .file(tempPath('.flutter_workspaces_cli.lock'))
                 .existsSync();
             destinationHeldDuringCreate = fs
-                .link(tempPath('packages/.new_pkg.reserved'))
+                .file(tempPath('packages/.new_pkg.reserved'))
                 .existsSync();
           },
         );
@@ -341,11 +351,11 @@ void main() {
         // Workspace lock and destination reservation released; the pre-existing
         // broken symlink is untouched.
         expect(
-          fs.link(tempPath('.flutter_workspaces_cli.lock')).existsSync(),
+          fs.file(tempPath('.flutter_workspaces_cli.lock')).existsSync(),
           isFalse,
         );
         expect(
-          fs.link(tempPath('packages/.new_pkg.reserved')).existsSync(),
+          fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
           isFalse,
         );
         expect(fs.link(tempPath('packages/broken_link')).existsSync(), isTrue);
@@ -390,11 +400,11 @@ void main() {
         // Lock and destination reservation released; the dangling symlink
         // survives the rollback.
         expect(
-          fs.link(tempPath('.flutter_workspaces_cli.lock')).existsSync(),
+          fs.file(tempPath('.flutter_workspaces_cli.lock')).existsSync(),
           isFalse,
         );
         expect(
-          fs.link(tempPath('packages/.new_pkg.reserved')).existsSync(),
+          fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
           isFalse,
         );
         expect(fs.link(tempPath('packages/broken_link')).existsSync(), isTrue);
@@ -406,7 +416,9 @@ void main() {
       layoutWorkspace();
       // Simulate an interrupted winner: the destination reservation is left
       // behind and the package directory does not exist.
-      fs.link(tempPath('packages/.new_pkg.reserved')).createSync('reserved');
+      fs
+          .file(tempPath('packages/.new_pkg.reserved'))
+          .createSync(exclusive: true);
 
       final logs = <String>[];
       expect(
@@ -429,7 +441,7 @@ void main() {
         equals('workspace:\n  - app\n'),
       );
       expect(
-        fs.link(tempPath('packages/.new_pkg.reserved')).existsSync(),
+        fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
         isTrue,
       );
     });
@@ -458,7 +470,7 @@ void main() {
       // The dangling symlink is untouched and no reserved sentinel survives.
       expect(fs.link(tempPath('packages/new_pkg')).existsSync(), isTrue);
       expect(
-        fs.link(tempPath('packages/.new_pkg.reserved')).existsSync(),
+        fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
         isFalse,
       );
       expect(
@@ -585,7 +597,7 @@ void main() {
         isTrue,
       );
       expect(
-        fs.link(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        fs.file(tempPath('.my_app_workspaces.reserved')).existsSync(),
         isFalse,
         reason: 'the winner releases its reservation on success',
       );

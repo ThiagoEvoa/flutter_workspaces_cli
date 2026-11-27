@@ -143,7 +143,8 @@ class SetupRunner {
         final releaseError = reservation.release();
         if (releaseError != null) {
           errorLog(
-            '⚠️ Failed to release the workspace reservation: $releaseError',
+            '⚠️ Failed to release the workspace reservation at '
+            '"${reservation.sentinelPath}": $releaseError',
           );
         }
       }

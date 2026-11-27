@@ -20,7 +20,7 @@
 //
 //   - the first scripted call (`--version --machine`, run BEFORE the
 //     workspace claim), so both spawned processes pass the read-only guard
-//     before either reaches the atomic claim — the sentinel link is then
+//     before either reaches the atomic claim — the sentinel file is then
 //     the only gate, which is what this test proves;
 //   - the `flutter create` step (while the winner holds the sentinel),
 //     widening that holding window.

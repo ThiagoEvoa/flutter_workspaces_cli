@@ -104,12 +104,14 @@ class AddPackageRunner {
       // Reserve the target package directory EXCLUSIVELY before generating any
       // files. An occupied path — a directory, a file, or a link (including a
       // dangling link) — is refused with the friendly error below. The atomic
-      // claim is a sentinel link created in the `packages` directory: creating
-      // the link is compare-and-set, so two concurrent invocations cannot both
-      // claim the same destination. `package:file` 7.x has no `exclusive` flag
-      // on `createSync` (both `Directory.createSync` and `File.createSync` are
-      // silent on an existing path), so the sentinel is the reservation
-      // mechanism; the friendly error below still fires for an occupied target.
+      // claim is a sentinel file created in the `packages` directory with
+      // `dart:io`'s exclusive file create (see [RunReservation]): the create is
+      // a compare-and-set, so two concurrent invocations cannot both claim the
+      // same destination, and — being an ordinary file — it needs neither an
+      // elevated token nor Windows Developer Mode. `package:file` 7.x cannot
+      // supply it (its `File.createSync` drops `exclusive`), so the sentinel is
+      // the reservation mechanism; the friendly error below still fires for an
+      // occupied target, and a permission/IO error is reported as such.
       final targetPath = 'packages/$packageName';
       final targetDir = fs.directory(targetPath);
       final targetFile = packagesDir.childFile(packageName);
@@ -131,12 +133,25 @@ class AddPackageRunner {
           sentinelPath: sentinelPath,
           contextLabel: 'the destination package directory "$targetPath"',
         );
-      } catch (e) {
+      } on ReservationAcquisitionException catch (e) {
+        // Keep the two failure kinds distinct: an occupied destination reports
+        // contention (with the recovery steps); a permission/IO error that
+        // prevented the create is reported as such. Both name the path and
+        // retain the underlying error.
+        if (e.failure == ReservationAcquisitionFailure.contended) {
+          throw Exception(
+            '⚠️ Target directory "$targetPath" is already reserved: another '
+            'flutter_workspaces_cli run is in progress, or a previous run was '
+            'interrupted and left a reservation behind at '
+            '"${e.sentinelPath}". Refusing to overwrite it. Aborting. '
+            'Details: ${e.underlying}',
+          );
+        }
         throw Exception(
-          '⚠️ Target directory "$targetPath" is already reserved: another '
-          'flutter_workspaces_cli run is in progress, or a previous run was '
-          'interrupted and left a reservation behind. Refusing to overwrite it. '
-          'Aborting. Details: $e',
+          '⚠️ Target directory "$targetPath" could not be reserved: a '
+          'permission or file-system error prevented creating the reservation at '
+          '"${e.sentinelPath}". Refusing to proceed. Aborting. '
+          'Details: ${e.underlying}',
         );
       }
 
@@ -236,7 +251,8 @@ class AddPackageRunner {
         final releaseError = destination.release();
         if (releaseError != null) {
           errorLog(
-            '⚠️ Failed to release the destination package reservation: $releaseError',
+            '⚠️ Failed to release the destination package reservation at '
+            '"${destination.sentinelPath}": $releaseError',
           );
         }
       }
@@ -244,7 +260,10 @@ class AddPackageRunner {
       if (lock != null) {
         final releaseError = lock.release();
         if (releaseError != null) {
-          errorLog('⚠️ Failed to release the workspace lock: $releaseError');
+          errorLog(
+            '⚠️ Failed to release the workspace lock at '
+            '"${lock.sentinelPath}": $releaseError',
+          );
         }
       }
     }
