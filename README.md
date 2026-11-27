@@ -125,6 +125,46 @@ my_app_workspaces/
 - `1`: Execution error (execution failed)
 - `64`: Usage error (missing/invalid name, unknown flag, stray argument)
 
+## Releases
+
+Releases are published to [pub.dev](https://pub.dev/packages/flutter_workspaces_cli) by the maintainer, using a verified, tag-driven flow. Ordinary branch and PR checks are read-only: they validate that `pubspec.yaml` and the first line of `CHANGELOG.md` agree, and never create a tag or publish.
+
+### Tagging path
+
+1. Bump the version in `pubspec.yaml` to the intended semver (e.g. `1.3.0`).
+2. Update the first line of `CHANGELOG.md` to match the new version.
+3. Confirm the PR's checks are green, then merge to `master`.
+4. From a clean `master` checkout, the maintainer pushes the tag:
+
+   ```bash
+   git tag v1.3.0
+   git push origin v1.3.0
+   ```
+
+   (use the actual version, e.g. `v1.3.0`)
+
+### Expected Actions run
+
+Pushing the tag triggers the `Publish to pub.dev` workflow (`.github/workflows/publish.yml`). It:
+
+1. Reads the pushed tag, the `pubspec.yaml` version, and the first `CHANGELOG.md` version.
+2. Verifies that the tag equals `v<pubspec version>` and that the pubspec version matches the changelog version — any mismatch fails the run before anything is published.
+3. Runs the standard checks (`dart pub get --enforce-lockfile`, `dart format --set-exit-if-changed .`, `dart analyze`, `dart test`).
+4. Runs `dart pub publish --dry-run` to confirm the package is publishable (no publication happens).
+5. Publishes with `dart pub publish`.
+
+The workflow only runs when the maintainer pushes the tag — nothing is published before that push. The maintainer owns the release; this page documents the path.
+
+### Retry behavior
+
+- An existing tag does **not** re-trigger the workflow — do not silently re-push or delete an existing tag.
+- If a run fails mid-way, re-run the failed job from the Actions UI (or `gh run rerun <run-id>`). Never silently re-push or force-push the tag.
+- If the version in `pubspec.yaml` was wrong, fix it forward on a new commit and a new tag — do not reuse a pushed tag.
+
+### Verification
+
+`dart pub publish --dry-run` (run locally or in CI) confirms the package is publishable without publishing anything. Do not publish a live version as part of implementation — the maintainer publishes later.
+
 ## Development
 
 ### Running Tests

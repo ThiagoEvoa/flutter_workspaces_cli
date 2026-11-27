@@ -4,10 +4,10 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*' # Matches v1.0.0, v1.2.3-dev, etc.
-  workflow_dispatch:
 
 permissions:
   id-token: write # Required for OIDC
+  contents: read
 
 jobs:
   publish:
@@ -15,6 +15,47 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dart-lang/setup-dart@v1
-      - run: dart pub get
+
+      - name: Read tag, pubspec, and changelog versions
+        id: versions
+        # Extracts the pushed tag, the pubspec version, and the first CHANGELOG version
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          PUBSPEC_VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}')"
+          CHANGELOG_VERSION="$(head -n 1 CHANGELOG.md | awk '{print $2}')"
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "pubspec=$PUBSPEC_VERSION" >> "$GITHUB_OUTPUT"
+          echo "changelog=$CHANGELOG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag, pubspec, and changelog agree
+        run: |
+          TAG_NAME="${{ steps.versions.outputs.tag }}"
+          PUBSPEC_VERSION="${{ steps.versions.outputs.pubspec }}"
+          CHANGELOG_VERSION="${{ steps.versions.outputs.changelog }}"
+          if [ "$TAG_NAME" != "v$PUBSPEC_VERSION" ]; then
+            echo "::error::Tag mismatch! Tag: $TAG_NAME, pubspec.yaml version: $PUBSPEC_VERSION (expected v$PUBSPEC_VERSION)"
+            exit 1
+          fi
+          if [ "$PUBSPEC_VERSION" != "$CHANGELOG_VERSION" ]; then
+            echo "::error::Version mismatch! pubspec.yaml: $PUBSPEC_VERSION, CHANGELOG.md: $CHANGELOG_VERSION"
+            exit 1
+          fi
+          echo "Tag, pubspec, and changelog agree: $PUBSPEC_VERSION"
+
+      - name: Get dependencies
+        run: dart pub get --enforce-lockfile
+
+      - name: Check formatting
+        run: dart format --set-exit-if-changed .
+
+      - name: Analyze
+        run: dart analyze
+
+      - name: Test
+        run: dart test
+
+      - name: Publish dry run
+        run: dart pub publish --dry-run
+
       - name: Publish to pub.dev
-        run: dart pub publish --force
+        run: dart pub publish
