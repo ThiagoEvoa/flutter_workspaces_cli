@@ -1,25 +1,112 @@
 import 'package:args/args.dart';
 
+/// Reserved Dart words rejected by Flutter's package-name validation.
+///
+/// This set is exactly the `_keywords` list in the Flutter tool's
+/// `create_base.dart` (`isValidPackageName`), which is what
+/// `flutter create --template=package` enforces before creating the package.
+/// The rule set is deliberately identical to Flutter's — not pub's own
+/// reserved-words list — because this CLI creates new packages through
+/// `flutter create`, so the CLI must never accept a name the scaffolding it
+/// invokes would reject. Because the validator already requires an all-lowercase
+/// `[a-z0-9_]` name, the check is a direct lowercase-set lookup.
+///
+/// Source of truth (verified against the locally installed Flutter 3.50.1):
+/// `<flutter>/packages/flutter_tools/lib/src/commands/create_base.dart`
+/// (`const _keywords = <String>{...}` and the `[a-z_][a-z0-9_]*` identifier
+/// regex). Flutter also rejects the dependency-conflicting package names
+/// `collection`, `flutter`, `flutter_test`, and `meta`, but that is a separate
+/// rule from the reserved-word axis covered by this issue and is not enforced
+/// here.
+///
+/// Note on scope: `int` is NOT a reserved word — it is a built-in type, and
+/// Flutter's validation does not reject it, so `int` is intentionally allowed.
+const kReservedDartWords = <String>{
+  'abstract',
+  'as',
+  'assert',
+  'async',
+  'await',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'covariant',
+  'default',
+  'deferred',
+  'do',
+  'dynamic',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'extension',
+  'external',
+  'factory',
+  'false',
+  'final',
+  'finally',
+  'for',
+  'function',
+  'get',
+  'hide',
+  'if',
+  'implements',
+  'import',
+  'in',
+  'inout',
+  'interface',
+  'is',
+  'late',
+  'library',
+  'mixin',
+  'native',
+  'new',
+  'null',
+  'of',
+  'on',
+  'operator',
+  'out',
+  'part',
+  'patch',
+  'required',
+  'rethrow',
+  'return',
+  'set',
+  'show',
+  'source',
+  'static',
+  'super',
+  'switch',
+  'sync',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'typedef',
+  'var',
+  'void',
+  'while',
+  'with',
+  'yield',
+};
+
 /// Canonical Dart package naming rule shared by every command path.
 ///
 /// Rule set (verified against the official Dart pub documentation at
 /// https://dart.dev/tools/pub/pubspec.md ("Name" section), which requires an
 /// all-lowercase name of `[a-z0-9_]` that is a valid Dart identifier — not a
-/// leading digit, not a reserved word — and against the bundled pub
-/// implementation's `NameValidator` (non-empty, only letters/digits/underscores
-/// with letter-or-underscore start, not a reserved word, lowercase emitted as a
-/// warning):
+/// leading digit, not a reserved word — and against the bundled Flutter tool's
+/// package-name validation in `create_base.dart` (`isValidPackageName`), which
+/// requires the name to match `[a-z_][a-z0-9_]*` and not be a reserved word):
 ///
 /// - starts with a lowercase letter (`[a-z]`)
 /// - contains only lowercase letters, digits, and underscores (`[a-z0-9_]`)
+/// - is not a reserved Dart word ([kReservedDartWords])
 /// - at most 64 characters (a length guard added by the issue design; neither
-///   the official docs nor the bundled pub validator states one)
-///
-/// The official identifier rules (must not start with a digit, must not be a
-/// reserved word) are satisfied by the stricter rules above, except reserved
-/// words that match `^[a-z][a-z0-9_]*$` exactly (e.g. `class`, `int`): those are
-/// not excluded here, because the issue design does not exercise that axis, so
-/// the helper enforces exactly the three rules listed above.
+///   the official docs nor Flutter's validation states one)
 ///
 /// Throws:
 /// - [ArgumentError] with a contextual message naming the failing rule.
@@ -32,6 +119,11 @@ void validateProjectName(String name) {
   if (!RegExp(r'^[a-z0-9_]*$').hasMatch(name)) {
     throw ArgumentError(
       'Invalid project name "$name": may only contain lowercase letters, digits, and underscores (a-z, 0-9, _).',
+    );
+  }
+  if (kReservedDartWords.contains(name)) {
+    throw ArgumentError(
+      'Invalid project name "$name": must not be a reserved Dart word.',
     );
   }
   if (name.length > 64) {
