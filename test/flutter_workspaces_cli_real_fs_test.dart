@@ -522,11 +522,21 @@ void main() {
         workingDirectory: packageRoot(),
       );
 
+      // Drain stdout AND stderr concurrently: attach the read on each
+      // stream before awaiting the exit codes. A child whose stdout pipe is
+      // never drained can block indefinitely on a full pipe buffer (this is
+      // what hung the Windows CI leg); awaiting exit codes before the
+      // streams are drained would deadlock. Await the exit codes first,
+      // then the (already-closing) stream futures, then assert.
+      final stdoutAFuture = processA.stdout.transform(utf8.decoder).join();
       final stderrAFuture = processA.stderr.transform(utf8.decoder).join();
+      final stdoutBFuture = processB.stdout.transform(utf8.decoder).join();
       final stderrBFuture = processB.stderr.transform(utf8.decoder).join();
       final exitA = await processA.exitCode;
       final exitB = await processB.exitCode;
+      final stdoutA = await stdoutAFuture;
       final stderrA = await stderrAFuture;
+      final stdoutB = await stdoutBFuture;
       final stderrB = await stderrBFuture;
 
       final codes = [exitA, exitB];
@@ -536,9 +546,10 @@ void main() {
         equals(1),
         reason:
             'expected exactly one winning process; exits were A=$exitA B=$exitB; '
-            'A stderr: $stderrA\nB stderr: $stderrB',
+            'A stdout: $stdoutA\nA stderr: $stderrA\nB stdout: $stdoutB\nB stderr: $stderrB',
       );
       final loserStderr = exitA == 0 ? stderrB : stderrA;
+      final loserStdout = exitA == 0 ? stdoutB : stdoutA;
 
       // The loser was rejected with a friendly CLI error (not a low-level
       // exception or a crash). Two OS processes have unbounded startup
@@ -550,7 +561,8 @@ void main() {
       expect(
         loserStderr,
         anyOf(contains('already reserved'), contains('already exists')),
-        reason: 'expected a friendly rejection message, got: $loserStderr',
+        reason:
+            'expected a friendly rejection message, got stderr: $loserStderr; stdout: $loserStdout',
       );
 
       // The winner's workspace survived intact: the workspace directory and
