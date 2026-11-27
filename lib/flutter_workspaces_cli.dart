@@ -1,4 +1,5 @@
 export 'add_package_runner.dart';
+export 'cli.dart';
 export 'common_process.dart';
 export 'core_package_process.dart';
 export 'dart_process.dart';

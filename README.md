@@ -52,6 +52,25 @@ To add a new package to an existing workspace, use the `add-package` command fro
 flutter_workspaces_cli add-package --name my_feature
 ```
 
+`setup` is an explicit alias for the default setup command: `flutter_workspaces_cli setup --name my_app` is equivalent to `flutter_workspaces_cli --name my_app`.
+
+### Help
+
+The CLI prints usage and exits `0` for help requests. No workspace folder is created and no Flutter command is run.
+
+Global help (usage + all commands + global options):
+
+```bash
+flutter_workspaces_cli --help      # also: -h, help, help setup
+flutter_workspaces_cli setup --help  # the default setup command
+```
+
+Add-package help (add-package usage + global options):
+
+```bash
+flutter_workspaces_cli add-package --help   # also: add-package -h, add-package help, help add-package
+```
+
 ## Project Structure
 
 The project follows a modular service-based structure in `lib/`:
@@ -102,9 +121,9 @@ my_app_workspaces/
 
 ## Exit Codes
 
-- `0`: Success
-- `1`: General error (execution failed)
-- `64`: Missing or invalid arguments (e.g., `--name` not provided)
+- `0`: Success and help
+- `1`: Execution error (execution failed)
+- `64`: Usage error (missing/invalid name, unknown flag, stray argument)
 
 ## Development
 

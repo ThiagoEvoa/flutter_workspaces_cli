@@ -3,6 +3,14 @@ import 'package:file/file.dart';
 
 import 'process_runner.dart';
 
+/// Canonical usage line for the default/explicit `setup` command.
+const String kSetupUsageLine =
+    'Usage: flutter_workspaces_cli [setup] --name <name>';
+
+/// Canonical usage line for the `add-package` command.
+const String kAddPackageUsageLine =
+    'Usage: flutter_workspaces_cli add-package --name <name>';
+
 /// Common CLI helpers used across the package.
 ///
 /// Shared utilities for printing usage, remembering the initial working
@@ -18,9 +26,21 @@ class CommonProcess {
   ///
   /// Parameters:
   /// - `parser`: the [ArgParser] configured with available options.
-  void printUsage(ArgParser parser) {
-    log('\nUsage: dart flutter_workspaces_cli.dart [arguments]');
-    log(parser.usage);
+  /// - `sink`: the output sink for the usage text. Defaults to [log] (stdout
+  ///   in normal use); usage errors are routed to the error sink by the
+  ///   caller via this parameter.
+  /// - `usageLine`: the usage line shown above the parser usage. Defaults to
+  ///   the historical line kept for backwards compatibility.
+  void printUsage(
+    ArgParser parser, {
+    void Function(String)? sink,
+    String? usageLine,
+  }) {
+    final output = sink ?? log;
+    output(
+      usageLine ?? '\nUsage: dart flutter_workspaces_cli.dart [arguments]',
+    );
+    output(parser.usage);
   }
 
   /// Returns the directory where the CLI was initially invoked.
