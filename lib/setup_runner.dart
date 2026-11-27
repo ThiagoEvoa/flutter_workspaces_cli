@@ -1,4 +1,3 @@
-import 'package:args/args.dart';
 import 'package:file/file.dart';
 import 'package:flutter_workspaces_cli/flutter_workspaces_cli.dart';
 
@@ -7,8 +6,14 @@ class SetupRunner {
   final FileSystem fs;
   final ProcessRunner runner;
   final void Function(String) log;
+  final void Function(String) errorLog;
 
-  SetupRunner({required this.fs, required this.runner, this.log = print});
+  SetupRunner({
+    required this.fs,
+    required this.runner,
+    this.log = print,
+    void Function(String)? errorLog,
+  }) : errorLog = errorLog ?? log;
 
   /// Runs the setup workflow.
   void run(List<String> arguments) {
@@ -93,15 +98,14 @@ class SetupRunner {
 
       log('\n🎉 Flutter workspace setup completed successfully!');
     } on ArgumentError catch (e) {
-      log('⚠️ Error: ${e.message}');
-      final parser = ArgParser()
-        ..addOption('name', abbr: 'n', help: 'The name of the project.');
-      common.printUsage(parser);
+      errorLog('⚠️ Error: ${e.message}');
+      final parser = buildNameParser();
+      common.printUsage(parser, sink: errorLog, usageLine: kSetupUsageLine);
       throw ExitException(64);
     } catch (e) {
       // Record the original failure; it is rethrown below so a cleanup problem
       // can never hide it.
-      log('⚠️ Error: ${e.toString()}');
+      errorLog('⚠️ Error: ${e.toString()}');
 
       // Restore the process working directory on EVERY exit path, *before*
       // cleanup, so the reserved folder (never the invocation directory) is the
@@ -111,7 +115,7 @@ class SetupRunner {
           fs.currentDirectory = initialDirectory;
         }
       } catch (restoreError) {
-        log('⚠️ Failed to restore the working directory: $restoreError');
+        errorLog('⚠️ Failed to restore the working directory: $restoreError');
       }
 
       // Clean up ONLY the reserved directory. Surface any cleanup error alongside
@@ -121,7 +125,7 @@ class SetupRunner {
           reservedDirectory: reservedDirectory,
         );
         if (cleanupError != null) {
-          log('⚠️ Cleanup also failed: $cleanupError');
+          errorLog('⚠️ Cleanup also failed: $cleanupError');
         }
       }
       throw ExitException(1);

@@ -3259,4 +3259,458 @@ dependencies:
       },
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // Issue #18: unified CLI argument validation, help, and exit codes.
+  // ---------------------------------------------------------------------------
+  group('CLI dispatch (Issue #18)', () {
+    late List<String> errors;
+
+    Cli buildCli() {
+      errors = [];
+      return Cli(
+        fs: fs,
+        runner: runner,
+        log: logger,
+        errorLog: (message) => errors.add(message),
+      );
+    }
+
+    void stubHappySetup() {
+      when(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.6.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final executable = invocation.positionalArguments[0] as String;
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            !args.contains('--template=package')) {
+          final appName = args.last;
+          fs.directory('$appName/lib').createSync(recursive: true);
+          fs.directory('$appName/test').createSync(recursive: true);
+        }
+        if (executable == 'flutter' &&
+            args.contains('create') &&
+            args.contains('--template=package')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+    }
+
+    void stubHappyAddPackage() {
+      when(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          'flutter',
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.6.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.6.0',
+            stderr: '',
+          );
+        }
+        if (args.contains('create')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+    }
+
+    tearDown(() {
+      errors = [];
+    });
+
+    test(
+      'global help --help: exit 0, usage on stdout, no runner, no files',
+      () {
+        final initialDir = fs.directory('/test')..createSync();
+        fs.currentDirectory = initialDir;
+
+        final cli = buildCli();
+        expect(cli.run(['--help']), 0);
+
+        expect(logs, contains(contains('Usage:')));
+        expect(logs, contains(contains('Global options:')));
+        expect(errors, isEmpty);
+        expect(fs.directory('/test/my_app_workspaces').existsSync(), isFalse);
+        verifyNever(() => runner.runSync('flutter', any()));
+        verifyNever(() => runner.runSync('dart', any()));
+      },
+    );
+
+    test('global help -h: exit 0, usage on stdout, no runner, no files', () {
+      final initialDir = fs.directory('/test')..createSync();
+      fs.currentDirectory = initialDir;
+
+      final cli = buildCli();
+      expect(cli.run(['-h']), 0);
+
+      expect(logs, contains(contains('Usage:')));
+      expect(errors, isEmpty);
+      expect(fs.directory('/test/my_app_workspaces').existsSync(), isFalse);
+      verifyNever(() => runner.runSync('flutter', any()));
+      verifyNever(() => runner.runSync('dart', any()));
+    });
+
+    test(
+      'global help bare help: exit 0, usage on stdout, no runner, no files',
+      () {
+        final initialDir = fs.directory('/test')..createSync();
+        fs.currentDirectory = initialDir;
+
+        final cli = buildCli();
+        expect(cli.run(['help']), 0);
+
+        expect(logs, contains(contains('Usage:')));
+        expect(errors, isEmpty);
+        expect(fs.directory('/test/my_app_workspaces').existsSync(), isFalse);
+        verifyNever(() => runner.runSync('flutter', any()));
+        verifyNever(() => runner.runSync('dart', any()));
+      },
+    );
+
+    test(
+      'global help help setup: exit 0, usage on stdout, no runner, no files',
+      () {
+        final initialDir = fs.directory('/test')..createSync();
+        fs.currentDirectory = initialDir;
+
+        final cli = buildCli();
+        expect(cli.run(['help', 'setup']), 0);
+
+        expect(logs, contains(contains('Usage:')));
+        expect(errors, isEmpty);
+        expect(fs.directory('/test/my_app_workspaces').existsSync(), isFalse);
+        verifyNever(() => runner.runSync('flutter', any()));
+        verifyNever(() => runner.runSync('dart', any()));
+      },
+    );
+
+    test(
+      'default setup alias setup --help: exit 0, usage on stdout, no runner',
+      () {
+        final initialDir = fs.directory('/test')..createSync();
+        fs.currentDirectory = initialDir;
+
+        final cli = buildCli();
+        expect(cli.run(['setup', '--help']), 0);
+
+        expect(logs, contains(contains('Usage:')));
+        expect(logs, contains(contains('Global options:')));
+        expect(errors, isEmpty);
+        expect(fs.directory('/test/my_app_workspaces').existsSync(), isFalse);
+        verifyNever(() => runner.runSync('flutter', any()));
+        verifyNever(() => runner.runSync('dart', any()));
+      },
+    );
+
+    test(
+      'add-package help --help: exit 0, add-package usage, no runner, no files',
+      () {
+        final cli = buildCli();
+        expect(cli.run(['add-package', '--help']), 0);
+
+        expect(logs, contains(contains('add-package')));
+        expect(
+          logs,
+          contains(
+            contains('Usage: flutter_workspaces_cli add-package --name <name>'),
+          ),
+        );
+        expect(errors, isEmpty);
+        expect(fs.directory('packages').existsSync(), isFalse);
+        verifyNever(() => runner.runSync('flutter', any()));
+        verifyNever(() => runner.runSync('dart', any()));
+      },
+    );
+
+    test('add-package help -h: exit 0, add-package usage', () {
+      final cli = buildCli();
+      expect(cli.run(['add-package', '-h']), 0);
+
+      expect(
+        logs,
+        contains(
+          contains('Usage: flutter_workspaces_cli add-package --name <name>'),
+        ),
+      );
+      expect(errors, isEmpty);
+      verifyNever(() => runner.runSync('flutter', any()));
+      verifyNever(() => runner.runSync('dart', any()));
+    });
+
+    test('add-package help help: exit 0, add-package usage', () {
+      final cli = buildCli();
+      expect(cli.run(['add-package', 'help']), 0);
+
+      expect(
+        logs,
+        contains(
+          contains('Usage: flutter_workspaces_cli add-package --name <name>'),
+        ),
+      );
+      expect(errors, isEmpty);
+      verifyNever(() => runner.runSync('flutter', any()));
+      verifyNever(() => runner.runSync('dart', any()));
+    });
+
+    test('help add-package: exit 0, add-package usage', () {
+      final cli = buildCli();
+      expect(cli.run(['help', 'add-package']), 0);
+
+      expect(
+        logs,
+        contains(
+          contains('Usage: flutter_workspaces_cli add-package --name <name>'),
+        ),
+      );
+      expect(errors, isEmpty);
+      verifyNever(() => runner.runSync('flutter', any()));
+      verifyNever(() => runner.runSync('dart', any()));
+    });
+
+    test('missing name: [] exits 64 with setup usage on stderr only', () {
+      final cli = buildCli();
+      expect(cli.run([]), 64);
+
+      expect(
+        errors,
+        contains(
+          contains('Usage: flutter_workspaces_cli [setup] --name <name>'),
+        ),
+      );
+      expect(logs, isNot(contains(contains('Usage:'))));
+      expect(fs.directory('my_app_workspaces').existsSync(), isFalse);
+    });
+
+    test(
+      'missing name: [add-package] exits 64 with add-package usage on stderr only',
+      () {
+        final cli = buildCli();
+        expect(cli.run(['add-package']), 64);
+
+        expect(
+          errors,
+          contains(
+            contains('Usage: flutter_workspaces_cli add-package --name <name>'),
+          ),
+        );
+        expect(logs, isNot(contains(contains('Usage:'))));
+        expect(fs.directory('packages').existsSync(), isFalse);
+      },
+    );
+
+    test('invalid name "Bad Name": exits 64 with usage on stderr', () {
+      final cli = buildCli();
+      expect(cli.run(['--name', 'Bad Name']), 64);
+
+      expect(errors, contains(contains('must start with a lowercase letter')));
+      expect(errors, contains(contains('Usage:')));
+      expect(logs, isNot(contains(contains('Usage:'))));
+    });
+
+    test('invalid name "123bad": exits 64 with usage on stderr', () {
+      final cli = buildCli();
+      expect(cli.run(['--name', '123bad']), 64);
+
+      expect(errors, contains(contains('must start with a lowercase letter')));
+      expect(errors, contains(contains('Usage:')));
+      expect(logs, isNot(contains(contains('Usage:'))));
+    });
+
+    test('unknown flag --nope: exits 64 with usage on stderr', () {
+      final cli = buildCli();
+      expect(cli.run(['--nope', '--name', 'my_app']), 64);
+
+      expect(errors, contains(contains('Usage:')));
+      expect(logs, isNot(contains(contains('Usage:'))));
+    });
+
+    test('stray positional: [my_app] exits 64 with usage on stderr', () {
+      final cli = buildCli();
+      expect(cli.run(['my_app']), 64);
+
+      expect(errors, contains(contains('Unexpected argument')));
+      expect(errors, contains(contains('Usage:')));
+      expect(logs, isNot(contains(contains('Usage:'))));
+    });
+
+    test('valid long form --name: full dispatch succeeds, no usage error', () {
+      final initialDir = fs.directory('/test')..createSync();
+      fs.currentDirectory = initialDir;
+      stubHappySetup();
+
+      final cli = buildCli();
+      expect(cli.run(['--name', 'my_app']), 0);
+
+      expect(errors, isEmpty);
+      expect(fs.directory('/test/my_app_workspaces').existsSync(), isTrue);
+      expect(logs, contains(contains('completed successfully')));
+    });
+
+    test('valid short form -n: full dispatch succeeds, no usage error', () {
+      final initialDir = fs.directory('/test')..createSync();
+      fs.currentDirectory = initialDir;
+      stubHappySetup();
+
+      final cli = buildCli();
+      expect(cli.run(['-n', 'my_app']), 0);
+
+      expect(errors, isEmpty);
+      expect(fs.directory('/test/my_app_workspaces').existsSync(), isTrue);
+      expect(logs, contains(contains('completed successfully')));
+    });
+
+    test(
+      'valid long form add-package --name: dispatch succeeds, no usage error',
+      () {
+        fs.directory('packages').createSync();
+        fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
+        stubHappyAddPackage();
+
+        final cli = buildCli();
+        expect(cli.run(['add-package', '--name', 'my_feature']), 0);
+
+        expect(errors, isEmpty);
+        expect(
+          logs,
+          contains(contains('Package "my_feature" added successfully!')),
+        );
+        expect(
+          fs.file('packages/my_feature/pubspec.yaml').existsSync(),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'valid short form add-package -n: dispatch succeeds, no usage error',
+      () {
+        fs.directory('packages').createSync();
+        fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
+        stubHappyAddPackage();
+
+        final cli = buildCli();
+        expect(cli.run(['add-package', '-n', 'my_feature']), 0);
+
+        expect(errors, isEmpty);
+        expect(
+          logs,
+          contains(contains('Package "my_feature" added successfully!')),
+        );
+        expect(
+          fs.file('packages/my_feature/pubspec.yaml').existsSync(),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'execution error: valid setup run with failing Flutter exits 1 with the error on stderr',
+      () {
+        final initialDir = fs.directory('/work')..createSync();
+        fs.currentDirectory = initialDir;
+
+        when(
+          () => runner.runSync('flutter', ['--version'], runInShell: true),
+        ).thenReturn(
+          ProcessRunnerResult(
+            exitCode: 1,
+            stdout: 'flutter failed to start',
+            stderr: 'panic: no flutter',
+          ),
+        );
+
+        final cli = buildCli();
+        expect(cli.run(['--name', 'my_app']), 1);
+
+        expect(errors, contains(contains('flutter --version')));
+        expect(errors, contains(contains('exit code 1')));
+        // No workspace folder is created for the failed run.
+        expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+        expect(logs, isNot(contains(contains('Usage:'))));
+      },
+    );
+  });
 }

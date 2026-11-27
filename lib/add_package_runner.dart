@@ -1,4 +1,3 @@
-import 'package:args/args.dart';
 import 'package:file/file.dart';
 import 'package_process.dart';
 import 'process_runner.dart';
@@ -13,8 +12,14 @@ class AddPackageRunner {
   final FileSystem fs;
   final ProcessRunner runner;
   final void Function(String) log;
+  final void Function(String) errorLog;
 
-  AddPackageRunner({required this.fs, required this.runner, this.log = print});
+  AddPackageRunner({
+    required this.fs,
+    required this.runner,
+    this.log = print,
+    void Function(String)? errorLog,
+  }) : errorLog = errorLog ?? log;
 
   /// Runs the add-package workflow.
   void run(List<String> arguments) {
@@ -122,15 +127,20 @@ class AddPackageRunner {
 
       log('\n🎉 Package "$packageName" added successfully!');
     } on ArgumentError catch (e) {
-      log('⚠️ Error: ${e.message}');
-      final parser = ArgParser()
-        ..addOption('name', abbr: 'n', help: 'The name of the package.');
-      common.printUsage(parser);
+      errorLog('⚠️ Error: ${e.message}');
+      final parser = buildNameParser(
+        helpText: 'The name of the package. eg: "my_feature"',
+      );
+      common.printUsage(
+        parser,
+        sink: errorLog,
+        usageLine: kAddPackageUsageLine,
+      );
       throw ExitException(64);
     } catch (e) {
       // Record the original failure; it is rethrown below so a cleanup problem
       // can never hide it.
-      log('⚠️ Error: ${e.toString()}');
+      errorLog('⚠️ Error: ${e.toString()}');
 
       if (didCaptureState) {
         // Restore the root manifest to its original content.
@@ -139,7 +149,7 @@ class AddPackageRunner {
             fs.file('pubspec.yaml').writeAsStringSync(originalRootPubspec);
           }
         } catch (restoreError) {
-          log('⚠️ Failed to restore root pubspec.yaml: $restoreError');
+          errorLog('⚠️ Failed to restore root pubspec.yaml: $restoreError');
         }
 
         // Restore the lockfile: its original content, or its absence if it was
@@ -152,7 +162,7 @@ class AddPackageRunner {
             lockfile.deleteSync();
           }
         } catch (restoreError) {
-          log('⚠️ Failed to restore pubspec.lock: $restoreError');
+          errorLog('⚠️ Failed to restore pubspec.lock: $restoreError');
         }
 
         // Remove ONLY the reserved package directory and everything under it.
@@ -168,7 +178,7 @@ class AddPackageRunner {
             log('✅ Reserved package directory removed');
           }
         } catch (cleanupError) {
-          log('⚠️ Cleanup also failed: $cleanupError');
+          errorLog('⚠️ Cleanup also failed: $cleanupError');
         }
       }
       throw ExitException(1);
