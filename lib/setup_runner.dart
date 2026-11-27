@@ -26,9 +26,10 @@ class SetupRunner {
     final corePackage = CorePackageProcess(fs: fs, runner: runner, log: log);
 
     Directory? initialDirectory;
-    Directory? reservedDirectory;
+    ReservedWorkspace? reservedWorkspace;
     String? projectName;
     bool didCreateWorkspace = false;
+    RunReservation? reservedReservation;
 
     try {
       // Remember where we were invoked so the working directory can be restored
@@ -54,9 +55,10 @@ class SetupRunner {
       // and the workspace is never created or rolled back.
       final dartVersion = dart.getDartVersionSync();
 
-      reservedDirectory = workspace.createWorkspaceFolderSync(
+      reservedWorkspace = workspace.createWorkspaceFolderSync(
         projectName: projectName,
       );
+      reservedReservation = reservedWorkspace.reservation;
       didCreateWorkspace = true;
 
       flutterApp.createFlutterAppSync(projectName: projectName);
@@ -120,9 +122,9 @@ class SetupRunner {
 
       // Clean up ONLY the reserved directory. Surface any cleanup error alongside
       // the original failure instead of letting it replace the original.
-      if (didCreateWorkspace && reservedDirectory != null) {
+      if (didCreateWorkspace && reservedWorkspace != null) {
         final cleanupError = common.revertAllProcesses(
-          reservedDirectory: reservedDirectory,
+          reservedDirectory: reservedWorkspace.directory,
         );
         if (cleanupError != null) {
           errorLog('⚠️ Cleanup also failed: $cleanupError');
@@ -130,6 +132,20 @@ class SetupRunner {
       }
       throw ExitException(1);
     } finally {
+      // Release the reservation sentinel on EVERY exit path, so the next run
+      // (retry or a new invocation) is never blocked by a claim this run no
+      // longer holds — whether the setup succeeded, failed, or was rolled back.
+      // A release failure is logged, not thrown, so the original failure (and
+      // the cleanup result, when relevant) is never hidden.
+      final reservation = reservedReservation;
+      if (reservation != null) {
+        final releaseError = reservation.release();
+        if (releaseError != null) {
+          errorLog(
+            '⚠️ Failed to release the workspace reservation: $releaseError',
+          );
+        }
+      }
       // Guarantee the working directory is restored on the success path as well
       // (belt and suspenders around the restore performed above).
       if (initialDirectory != null) {

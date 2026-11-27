@@ -1429,6 +1429,16 @@ workspace:
       final runner2 = MockProcessRunner();
       final logs2 = <String>[];
 
+      // Sentinel links used by the workspace lock (acquire + release) and the
+      // destination reservation; release is a no-op when the sentinel does not
+      // exist (as mocked).
+      final sentinelLink = MockLink();
+      when(() => mockFs.link(any())).thenReturn(sentinelLink);
+      when(() => sentinelLink.createSync(any())).thenAnswer((_) {});
+      when(() => sentinelLink.existsSync()).thenReturn(false);
+      // Let the rollback's root-pubspec restore exercise cleanly on the mock.
+      when(() => rootFile.writeAsStringSync(any())).thenAnswer((_) {});
+
       when(() => mockFs.currentDirectory).thenReturn(baseDir);
       when(() => baseDir.path).thenReturn('/work');
       when(() => mockFs.file('pubspec.yaml')).thenReturn(rootFile);
@@ -1512,6 +1522,13 @@ workspace:
       final targetLink = MockLink();
       final runner2 = MockProcessRunner();
       final logs2 = <String>[];
+      // Sentinel links used by the workspace lock (acquire + release) and the
+      // destination reservation; release is a no-op when the sentinel does not
+      // exist (as mocked).
+      final sentinelLink = MockLink();
+      when(() => mockFs.link(any())).thenReturn(sentinelLink);
+      when(() => sentinelLink.createSync(any())).thenAnswer((_) {});
+      when(() => sentinelLink.existsSync()).thenReturn(false);
       const originalContent = 'workspace:\n  - app\n';
       const originalLockContent = 'ORIGINAL-LOCK\n';
       var reservedDirExists = false;
@@ -2030,6 +2047,13 @@ workspace:
       final childLink = MockLink();
       final runner2 = MockProcessRunner();
       final logs2 = <String>[];
+
+      // The workspace reservation sentinel link; release is a no-op when the
+      // sentinel does not exist (as mocked).
+      final sentinelLink = MockLink();
+      when(() => mockFs.link(any())).thenReturn(sentinelLink);
+      when(() => sentinelLink.createSync(any())).thenAnswer((_) {});
+      when(() => sentinelLink.existsSync()).thenReturn(false);
 
       // currentDirectory reads return baseDir; the restore setter is a no-op on
       // the mock, so the rollback path exercises without touching it.
@@ -3955,6 +3979,904 @@ dependencies:
         // The rejection behavior (detected vs required, before any writes) is documented.
         expect(readme, contains('before any filesystem writes'));
         expect(readme, contains('3.12.0'));
+      },
+    );
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Issue #31: atomic reservation and run isolation.
+  //
+  // The synchronized overlaps drive the race through the one hook point the
+  // memory backend exposes for this: the `opHandle` parameter of
+  // MemoryFileSystem, which fires synchronously inside the sentinel claim —
+  // i.e. inside the loser's atomic acquire. The hook runs the competing
+  // invocation in place of the loser's suspended claim, then restores the
+  // occupied sentinel exactly as an interrupted winner would leave behind.
+  // That is the legitimate way to make the race deterministic: the race
+  // between the existing-path guard/check and the atomic claim can only be
+  // interleaved inside the claim itself.
+  // ─────────────────────────────────────────────────────────────────────────
+  group('Issue #31: atomic reservation and run isolation', () {
+    /// Happy-path stub for the flutter subprocess and dart.getDartVersionSync.
+    void stubHappyPathRunner(ProcessRunner runner, FileSystem fs) {
+      when(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.12.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.12.0',
+            stderr: '',
+          );
+        }
+        if (args.contains('create') && !args.contains('--template=package')) {
+          final appName = args.last;
+          fs.directory('$appName/lib').createSync(recursive: true);
+          fs.directory('$appName/test').createSync(recursive: true);
+        }
+        if (args.contains('create') && args.contains('--template=package')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+    }
+
+    // ---- synchronized overlaps: same name ----
+
+    test(
+      'setup: two invocations for the same name — only one claims the target '
+      'and the loser leaves the winner\'s files intact',
+      () {
+        final logs = <String>[];
+        final winnerLogs = <String>[];
+        var hookFired = false;
+        const sentinelPath = '/work/.my_app_workspaces.reserved';
+
+        late MemoryFileSystem sharedFs;
+        void interleave(String context, FileSystemOp operation) {
+          if (hookFired) return;
+          if (operation != FileSystemOp.create) return;
+          if (context != sentinelPath) return;
+          hookFired = true;
+
+          // The competing invocation (the winner). It passes the same two
+          // guards (nothing exists yet), claims the same sentinel, scaffolds,
+          // and completes normally.
+          final winnerRunner = MockProcessRunner();
+          stubHappyPathRunner(winnerRunner, sharedFs);
+          final winner = SetupRunner(
+            fs: sharedFs,
+            runner: winnerRunner,
+            log: (m) => winnerLogs.add(m),
+            errorLog: (m) => winnerLogs.add(m),
+          );
+          winner.run(['--name', 'my_app']);
+
+          // The winner released its sentinel on the success path. Re-create
+          // the stale sentinel exactly as an interrupted winner would leave
+          // behind, so the loser's resumed atomic claim sees the reservation
+          // as held.
+          sharedFs.link(sentinelPath).createSync('reserved');
+        }
+
+        sharedFs = MemoryFileSystem(opHandle: interleave);
+        sharedFs.directory('/work').createSync();
+        sharedFs.currentDirectory = sharedFs.directory('/work');
+
+        final loserRunner = MockProcessRunner();
+        stubHappyPathRunner(loserRunner, sharedFs);
+        final loser = SetupRunner(
+          fs: sharedFs,
+          runner: loserRunner,
+          log: (m) => logs.add(m),
+          errorLog: (m) => logs.add(m),
+        );
+
+        expect(
+          () => loser.run(['--name', 'my_app']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // The loser failed at the atomic claim, before creating anything.
+        expect(logs, contains(contains('already reserved or occupied')));
+        expect(
+          logs,
+          isNot(contains('Flutter workspace setup completed successfully')),
+        );
+
+        // The winner's workspace was fully created and its success was logged.
+        expect(
+          winnerLogs,
+          contains(contains('Flutter workspace setup completed successfully')),
+        );
+        expect(
+          sharedFs.directory('/work/my_app_workspaces').existsSync(),
+          isTrue,
+        );
+        expect(
+          sharedFs.file('/work/my_app_workspaces/pubspec.yaml').existsSync(),
+          isTrue,
+        );
+        expect(
+          sharedFs.directory('/work/my_app_workspaces/my_app').existsSync(),
+          isTrue,
+        );
+
+        // The loser did not delete the winner's files or the stale sentinel.
+        expect(sharedFs.link(sentinelPath).existsSync(), isTrue);
+        expect(sharedFs.currentDirectory.path, equals('/work'));
+      },
+    );
+
+    test(
+      'add-package: two invocations for the same name — only one claims the '
+      'destination and the winner\'s files and manifest update stay intact',
+      () {
+        final logs = <String>[];
+        final winnerLogs = <String>[];
+        var hookFired = false;
+        const lockPath = '/work/.flutter_workspaces_cli.lock';
+
+        late MemoryFileSystem sharedFs;
+        void interleave(String context, FileSystemOp operation) {
+          if (hookFired) return;
+          if (operation != FileSystemOp.create) return;
+          if (context != lockPath) return;
+          hookFired = true;
+
+          final winnerRunner = MockProcessRunner();
+          stubHappyPathRunner(winnerRunner, sharedFs);
+          final winner = AddPackageRunner(
+            fs: sharedFs,
+            runner: winnerRunner,
+            log: (m) => winnerLogs.add(m),
+            errorLog: (m) => winnerLogs.add(m),
+          );
+          winner.run(['--name', 'new_pkg']);
+
+          // The winner released its lock and destination sentinel on the
+          // success path. Re-create the stale lock as an interrupted winner
+          // would leave it, so the loser's resumed atomic claim sees the
+          // workspace as held.
+          sharedFs.link(lockPath).createSync('reserved');
+        }
+
+        sharedFs = MemoryFileSystem(opHandle: interleave);
+        sharedFs.directory('/work').createSync();
+        sharedFs
+            .file('/work/pubspec.yaml')
+            .writeAsStringSync('workspace:\n  - app\n');
+        sharedFs.directory('/work/packages').createSync();
+        sharedFs.currentDirectory = sharedFs.directory('/work');
+
+        final loserRunner = MockProcessRunner();
+        stubHappyPathRunner(loserRunner, sharedFs);
+        final loser = AddPackageRunner(
+          fs: sharedFs,
+          runner: loserRunner,
+          log: (m) => logs.add(m),
+          errorLog: (m) => logs.add(m),
+        );
+
+        expect(
+          () => loser.run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // The loser exited at the workspace lock, before reading or writing
+        // anything.
+        expect(logs, contains(contains('workspace lock')));
+
+        // The winner fully completed: its package exists, its pubspec is
+        // written, and the manifest contains its member.
+        expect(
+          winnerLogs,
+          contains(contains('Package "new_pkg" added successfully!')),
+        );
+        expect(
+          sharedFs
+              .file('/work/packages/new_pkg/pubspec.yaml')
+              .readAsStringSync(),
+          contains('name: new_pkg'),
+        );
+        expect(
+          sharedFs.file('/work/pubspec.yaml').readAsStringSync(),
+          contains('packages/new_pkg'),
+        );
+
+        // The loser left the winner's package directory intact.
+        expect(
+          sharedFs.directory('/work/packages/new_pkg').existsSync(),
+          isTrue,
+        );
+        // The loser released nothing and left the stale lock behind.
+        expect(sharedFs.link(lockPath).existsSync(), isTrue);
+      },
+    );
+
+    // ---- synchronized overlaps: different names ----
+
+    test('add-package: two invocations with different names — neither loses the '
+        'other\'s manifest update', () {
+      final logs = <String>[];
+      final winnerLogs = <String>[];
+      var hookFired = false;
+      const lockPath = '/work/.flutter_workspaces_cli.lock';
+
+      late MemoryFileSystem sharedFs;
+      void interleave(String context, FileSystemOp operation) {
+        if (hookFired) return;
+        if (operation != FileSystemOp.create) return;
+        if (context != lockPath) return;
+        hookFired = true;
+
+        final winnerRunner = MockProcessRunner();
+        stubHappyPathRunner(winnerRunner, sharedFs);
+        final winner = AddPackageRunner(
+          fs: sharedFs,
+          runner: winnerRunner,
+          log: (m) => winnerLogs.add(m),
+          errorLog: (m) => winnerLogs.add(m),
+        );
+        winner.run(['--name', 'feature_b']);
+
+        // Re-create the stale lock exactly as an interrupted winner would.
+        sharedFs.link(lockPath).createSync('reserved');
+      }
+
+      sharedFs = MemoryFileSystem(opHandle: interleave);
+      sharedFs.directory('/work').createSync();
+      sharedFs
+          .file('/work/pubspec.yaml')
+          .writeAsStringSync('workspace:\n  - app\n');
+      sharedFs.directory('/work/packages').createSync();
+      sharedFs.currentDirectory = sharedFs.directory('/work');
+
+      final loserRunner = MockProcessRunner();
+      stubHappyPathRunner(loserRunner, sharedFs);
+      final loser = AddPackageRunner(
+        fs: sharedFs,
+        runner: loserRunner,
+        log: (m) => logs.add(m),
+        errorLog: (m) => logs.add(m),
+      );
+
+      expect(
+        () => loser.run(['--name', 'feature_a']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // The loser exited at the workspace lock — before touching anything.
+      expect(logs, contains(contains('workspace lock')));
+      expect(
+        sharedFs.directory('/work/packages/feature_a').existsSync(),
+        isFalse,
+      );
+
+      // The winner's manifest update stands: feature_b is present.
+      expect(
+        sharedFs.file('/work/pubspec.yaml').readAsStringSync(),
+        contains('packages/feature_b'),
+      );
+
+      // Recover the documented way: remove the stale lock (a manual recovery),
+      // then retry the loser — both membership updates are kept.
+      sharedFs.link(lockPath).deleteSync();
+      loser.run(['--name', 'feature_a']);
+
+      expect(
+        logs,
+        contains(contains('Package "feature_a" added successfully!')),
+      );
+      final manifest = sharedFs.file('/work/pubspec.yaml').readAsStringSync();
+      expect(manifest, contains('packages/feature_b'));
+      expect(manifest, contains('packages/feature_a'));
+    });
+
+    // ---- reservation/lock release on every exit path ----
+
+    test('setup: reservation is released on success', () {
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+      stubHappyPathRunner(runner, fs);
+
+      SetupRunner(
+        fs: fs,
+        runner: runner,
+        log: logger,
+      ).run(['--name', 'my_app']);
+
+      expect(
+        fs.link('/work/.my_app_workspaces.reserved').existsSync(),
+        isFalse,
+      );
+      expect(
+        logs,
+        contains(contains('Flutter workspace setup completed successfully')),
+      );
+    });
+
+    test('setup: reservation is released on failure — retried run completes', () {
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+
+      // Flutter fails at the scaffold step (create exits with code 2).
+      when(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.12.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.12.0',
+            stderr: '',
+          );
+        }
+        if (args.contains('create')) {
+          return ProcessRunnerResult(
+            exitCode: 2,
+            stdout: 'create failed',
+            stderr: '',
+          );
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      expect(
+        () => SetupRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'my_app']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // The rollback removed the reserved dir and the sentinel is released.
+      expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+      expect(
+        fs.link('/work/.my_app_workspaces.reserved').existsSync(),
+        isFalse,
+      );
+
+      // Heal the scaffold (retry with a working create) and retry.
+      when(
+        () => runner.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.12.0',
+            stderr: '',
+          );
+        }
+        if (args.contains('create') && !args.contains('--template=package')) {
+          final appName = args.last;
+          fs.directory('$appName/lib').createSync(recursive: true);
+          fs.directory('$appName/test').createSync(recursive: true);
+        }
+        if (args.contains('create') && args.contains('--template=package')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      expect(
+        () => SetupRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'my_app']),
+        returnsNormally,
+      );
+      expect(fs.directory('/work/my_app_workspaces').existsSync(), isTrue);
+      expect(
+        fs.link('/work/.my_app_workspaces.reserved').existsSync(),
+        isFalse,
+      );
+    });
+
+    test('setup: reservation is released even when the cleanup also fails', () {
+      // Engineer a cleanup failure through the memory-fs hook: the rollback
+      // deleteSync of the reserved directory throws.
+      var engineerDelete = true;
+      void hook(String context, FileSystemOp operation) {
+        if (engineerDelete &&
+            operation == FileSystemOp.delete &&
+            context == '/work/my_app_workspaces') {
+          throw Exception('engineered cleanup failure');
+        }
+      }
+
+      final failingFs = MemoryFileSystem(opHandle: hook);
+      failingFs.directory('/work').createSync();
+      failingFs.currentDirectory = failingFs.directory('/work');
+
+      final runner2 = MockProcessRunner();
+      stubHappyPathRunner(runner2, failingFs);
+      // Make the scaffold step fail.
+      when(
+        () => runner2.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.12.0',
+            stderr: '',
+          );
+        }
+        if (args.contains('create')) {
+          return ProcessRunnerResult(
+            exitCode: 2,
+            stdout: 'create failed',
+            stderr: '',
+          );
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      final logsList = <String>[];
+      expect(
+        () => SetupRunner(
+          fs: failingFs,
+          runner: runner2,
+          log: (m) => logsList.add(m),
+          errorLog: (m) => logsList.add(m),
+        ).run(['--name', 'my_app']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // The rollback failed and was surfaced, alongside the original failure.
+      expect(logsList, contains(contains('Cleanup also failed')));
+
+      // The sentinel was still released (best-effort) despite the cleanup failure.
+      expect(
+        failingFs.link('/work/.my_app_workspaces.reserved').existsSync(),
+        isFalse,
+      );
+
+      // The reserved directory is NOT removed (engineered failure).
+      expect(
+        failingFs.directory('/work/my_app_workspaces').existsSync(),
+        isTrue,
+      );
+    });
+
+    test('setup: reservation is never created on a usage error', () {
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+
+      expect(
+        () => SetupRunner(fs: fs, runner: runner, log: logger).run(['--name']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 64)),
+      );
+      expect(logs, contains(contains('Usage')));
+      expect(
+        fs.link('/work/.my_app_workspaces.reserved').existsSync(),
+        isFalse,
+      );
+    });
+
+    test(
+      'add-package: lock and destination sentinel are released on success',
+      () {
+        final initialDir = fs.directory('/work')..createSync();
+        fs.currentDirectory = initialDir;
+        fs
+            .file('/work/pubspec.yaml')
+            .writeAsStringSync('workspace:\n  - app\n');
+        fs.directory('/work/packages').createSync();
+        stubHappyPathRunner(runner, fs);
+
+        AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']);
+
+        expect(
+          fs.file('/work/pubspec.yaml').readAsStringSync(),
+          contains('packages/new_pkg'),
+        );
+        expect(fs.directory('/work/packages/new_pkg').existsSync(), isTrue);
+        expect(
+          fs.link('/work/.flutter_workspaces_cli.lock').existsSync(),
+          isFalse,
+        );
+        expect(
+          fs.link('/work/packages/.new_pkg.reserved').existsSync(),
+          isFalse,
+        );
+      },
+    );
+
+    test('add-package: lock and sentinel are released on failure — retried run '
+        'completes', () {
+      final initialDir = fs.directory('/work')..createSync();
+      fs.currentDirectory = initialDir;
+      fs.file('/work/pubspec.yaml').writeAsStringSync('workspace:\n  - app\n');
+      fs.file('/work/pubspec.lock').writeAsStringSync('ORIGINAL-LOCK\n');
+      fs.directory('/work/packages').createSync();
+
+      // Flutter create fails — the rollback must restore the manifest and
+      // lockfile, and the sentinel/lock must be released.
+      when(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout: 'Dart SDK version: 3.12.0',
+          stderr: '',
+        ),
+      );
+      when(
+        () => runner.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.12.0',
+            stderr: '',
+          );
+        }
+        if (args.contains('create')) {
+          return ProcessRunnerResult(
+            exitCode: 2,
+            stdout: 'create failed',
+            stderr: '',
+          );
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      expect(
+        () => AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // Manifest and lockfile restored; the reserved directory removed; the
+      // lock and destination sentinel both released.
+      expect(
+        fs.file('/work/pubspec.yaml').readAsStringSync(),
+        equals('workspace:\n  - app\n'),
+      );
+      expect(
+        fs.file('/work/pubspec.lock').readAsStringSync(),
+        equals('ORIGINAL-LOCK\n'),
+      );
+      expect(fs.directory('/work/packages/new_pkg').existsSync(), isFalse);
+      expect(
+        fs.link('/work/.flutter_workspaces_cli.lock').existsSync(),
+        isFalse,
+      );
+      expect(fs.link('/work/packages/.new_pkg.reserved').existsSync(), isFalse);
+
+      // Clean retry succeeds.
+      when(
+        () => runner.runSync(
+          any(),
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.12.0',
+            stderr: '',
+          );
+        }
+        if (args.contains('create')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      expect(
+        () => AddPackageRunner(
+          fs: fs,
+          runner: runner,
+          log: logger,
+        ).run(['--name', 'new_pkg']),
+        returnsNormally,
+      );
+      expect(fs.directory('/work/packages/new_pkg').existsSync(), isTrue);
+      expect(
+        fs.link('/work/.flutter_workspaces_cli.lock').existsSync(),
+        isFalse,
+      );
+    });
+
+    test(
+      'add-package: lock and sentinel are released even when the cleanup also fails',
+      () {
+        // Engineer a rollback delete failure through the memory-fs hook.
+        // Note: the rollback deletes the *relative* target path ("packages/new_pkg")
+        // as passed to fs.directory(), so the hook matches that context.
+        var engineerDelete = true;
+        void hook(String context, FileSystemOp operation) {
+          if (engineerDelete &&
+              operation == FileSystemOp.delete &&
+              context == 'packages/new_pkg') {
+            throw Exception('engineered cleanup failure');
+          }
+        }
+
+        final failingFs = MemoryFileSystem(opHandle: hook);
+        failingFs.directory('/work').createSync();
+        failingFs
+            .file('/work/pubspec.yaml')
+            .writeAsStringSync('workspace:\n  - app\n');
+        failingFs
+            .file('/work/pubspec.lock')
+            .writeAsStringSync('ORIGINAL-LOCK\n');
+        failingFs.directory('/work/packages').createSync();
+        failingFs.currentDirectory = failingFs.directory('/work');
+
+        final runner2 = MockProcessRunner();
+        stubHappyPathRunner(runner2, failingFs);
+        when(
+          () => runner2.runSync(
+            any(),
+            any(),
+            workingDirectory: any(named: 'workingDirectory'),
+            runInShell: any(named: 'runInShell'),
+          ),
+        ).thenAnswer((invocation) {
+          final args = invocation.positionalArguments[1] as List<String>;
+          if (args.join(' ') == '--version --machine') {
+            return ProcessRunnerResult(
+              exitCode: 0,
+              stdout:
+                  '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+              stderr: '',
+            );
+          }
+          if (args.join(' ') == '--version') {
+            return ProcessRunnerResult(
+              exitCode: 0,
+              stdout: 'Dart SDK version: 3.12.0',
+              stderr: '',
+            );
+          }
+          if (args.contains('create')) {
+            // Mirror flutter create's partial scaffold: the package directory is
+            // created, then the create fails — so the rollback has something to
+            // clean up and the engineered delete failure fires.
+            final packageName = args.last;
+            final workingDir =
+                invocation.namedArguments[#workingDirectory] as String?;
+            final path = workingDir != null
+                ? '$workingDir/$packageName'
+                : packageName;
+            failingFs.directory(path).createSync(recursive: true);
+            return ProcessRunnerResult(
+              exitCode: 2,
+              stdout: 'create failed',
+              stderr: '',
+            );
+          }
+          return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+        });
+
+        final logsList = <String>[];
+        expect(
+          () => AddPackageRunner(
+            fs: failingFs,
+            runner: runner2,
+            log: (m) => logsList.add(m),
+            errorLog: (m) => logsList.add(m),
+          ).run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        expect(logsList, contains(contains('Cleanup also failed')));
+        // The manifest and lockfile were restored...
+        expect(
+          failingFs.file('/work/pubspec.yaml').readAsStringSync(),
+          equals('workspace:\n  - app\n'),
+        );
+        expect(
+          failingFs.file('/work/pubspec.lock').readAsStringSync(),
+          equals('ORIGINAL-LOCK\n'),
+        );
+        // ...the package directory was NOT removed (engineered failure)...
+        expect(
+          failingFs.directory('/work/packages/new_pkg').existsSync(),
+          isTrue,
+        );
+        // ...but the lock and destination sentinel were still released.
+        expect(
+          failingFs.link('/work/.flutter_workspaces_cli.lock').existsSync(),
+          isFalse,
+        );
+        expect(
+          failingFs.link('/work/packages/.new_pkg.reserved').existsSync(),
+          isFalse,
+        );
+      },
+    );
+
+    test(
+      'add-package: lock and sentinel are never created on a usage error',
+      () {
+        final initialDir = fs.directory('/work')..createSync();
+        fs.currentDirectory = initialDir;
+
+        expect(
+          () => AddPackageRunner(
+            fs: fs,
+            runner: runner,
+            log: logger,
+          ).run(['--name']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 64)),
+        );
+        expect(logs, contains(contains('Usage')));
+        expect(
+          fs.link('/work/.flutter_workspaces_cli.lock').existsSync(),
+          isFalse,
+        );
+        expect(
+          fs.link('/work/packages/.new_pkg.reserved').existsSync(),
+          isFalse,
+        );
       },
     );
   });
