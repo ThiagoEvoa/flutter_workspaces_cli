@@ -101,8 +101,25 @@ Global options:
     }
 
     // An explicit help request anywhere in the command wins and is answered
-    // with the matching usage text on stdout.
-    if (rest.any(helpTokens.contains)) {
+    // with the matching usage text on stdout. The scan is positional-aware:
+    // the value token immediately following `--name`/`-n` is the option's
+    // value, never a help token — a valid name such as "help" must reach the
+    // runner rather than being swallowed by the help path. (Embedded forms
+    // such as `--name=value` and `-n<value>` need no special case: the token
+    // is not exactly a help token and cannot false-match.)
+    var helpRequested = false;
+    for (var i = 0; i < rest.length; i++) {
+      final token = rest[i];
+      if (token == '--name' || token == '-n') {
+        i++; // Skip the token in the option-value position.
+        continue;
+      }
+      if (helpTokens.contains(token)) {
+        helpRequested = true;
+        break;
+      }
+    }
+    if (helpRequested) {
       if (command == 'add-package') {
         log(
           _commandHelpText(
@@ -159,6 +176,6 @@ Global options:
   /// the shared `--name` option table and the global options line.
   static String _commandHelpText(String usageLine, String helpText) {
     final parser = buildNameParser(helpText: helpText);
-    return '\n$usageLine\n\nOptions:\n${parser.usage}$_globalOptionsLine';
+    return '\n$usageLine\n\nOptions:\n${parser.usage}\n$_globalOptionsLine';
   }
 }

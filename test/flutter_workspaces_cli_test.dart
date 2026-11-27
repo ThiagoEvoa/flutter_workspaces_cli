@@ -3687,6 +3687,51 @@ dependencies:
     );
 
     test(
+      'valid name "help" (long form): --name help reaches the runner, not help',
+      () {
+        final initialDir = fs.directory('/test')..createSync();
+        fs.currentDirectory = initialDir;
+        stubHappySetup();
+
+        final cli = buildCli();
+        expect(cli.run(['--name', 'help']), 0);
+
+        // A valid name must reach the runner, so no help text on stdout.
+        expect(logs, isNot(contains(contains('Usage:'))));
+        expect(fs.directory('/test/help_workspaces').existsSync(), isTrue);
+      },
+    );
+
+    test(
+      'valid name "help" (short form): -n help reaches the runner, not help',
+      () {
+        final initialDir = fs.directory('/test')..createSync();
+        fs.currentDirectory = initialDir;
+        stubHappySetup();
+
+        final cli = buildCli();
+        expect(cli.run(['-n', 'help']), 0);
+
+        expect(logs, isNot(contains(contains('Usage:'))));
+        expect(fs.directory('/test/help_workspaces').existsSync(), isTrue);
+      },
+    );
+
+    test('valid name "help" with add-package: reaches the runner, not help', () {
+      fs.directory('packages').createSync();
+      fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - help');
+      stubHappyAddPackage();
+
+      final cli = buildCli();
+      expect(cli.run(['add-package', '--name', 'help']), 0);
+
+      // The add-package usage must NOT be printed; the run reaches the runner.
+      expect(logs, isNot(contains(contains('Usage:'))));
+      expect(logs, contains(contains('Package "help" added successfully!')));
+      expect(fs.file('packages/help/pubspec.yaml').existsSync(), isTrue);
+    });
+
+    test(
       'execution error: valid setup run with failing Flutter exits 1 with the error on stderr',
       () {
         final initialDir = fs.directory('/work')..createSync();
