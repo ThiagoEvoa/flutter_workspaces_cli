@@ -1,0 +1,38 @@
+# NOTE: This is a test-mode companion to .github/workflows/publish.yml. It must
+# stay in sync with the publish workflow's gate order and shape; the assertions
+# in test/publish_workflow_test.dart check that ordering and shape.
+# Never publishes and never uses OIDC — the only publish-adjacent step
+# allowed is the dry run (`dart pub publish --dry-run`), which never uploads.
+name: Publish (offline test mode)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-mode:
+    name: Test-mode publish gates (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+
+      - name: Get dependencies
+        run: dart pub get --enforce-lockfile
+
+      - name: Check formatting
+        run: dart format --set-exit-if-changed .
+
+      - name: Analyze
+        run: dart analyze
+
+      - name: Test
+        run: dart test
+
+      - name: Publish dry run
+        run: dart pub publish --dry-run

@@ -151,7 +151,7 @@ Pushing the tag triggers the `Publish to pub.dev` workflow (`.github/workflows/p
 2. Verifies that the tag equals `v<pubspec version>` and that the pubspec version matches the changelog version — any mismatch fails the run before anything is published.
 3. Runs the standard checks (`dart pub get --enforce-lockfile`, `dart format --set-exit-if-changed .`, `dart analyze`, `dart test`).
 4. Runs `dart pub publish --dry-run` to confirm the package is publishable (no publication happens).
-5. Publishes with `dart pub publish`.
+5. Publishes with `dart pub publish --force` — a non-interactive command, so it runs on the GitHub Actions runner with no stdin or terminal. The final step runs only after the tag/version verification, dependency resolution, formatting, analysis, tests, and the dry run all pass.
 
 The workflow only runs when the maintainer pushes the tag — nothing is published before that push. The maintainer owns the release; this page documents the path.
 
@@ -163,7 +163,10 @@ The workflow only runs when the maintainer pushes the tag — nothing is publish
 
 ### Verification
 
-`dart pub publish --dry-run` (run locally or in CI) confirms the package is publishable without publishing anything. Do not publish a live version as part of implementation — the maintainer publishes later.
+There are two offline verification paths, both of which never publish a live version:
+
+- **Dry run in the publish workflow.** `dart pub publish --dry-run` runs locally or in CI and confirms the package is publishable without publishing anything. Nothing is published before the maintainer pushes the tag — do not publish a live version as part of implementation.
+- **Test-mode workflow.** `.github/workflows/publish-test.yml` is a manual, offline companion to the publish workflow (`workflow_dispatch`, contents-read only, no OIDC, never uploads). It runs the same gates in the same order as the publish workflow: dependency resolution, formatting, analysis, tests, and the dry run. To trigger it, open the repository's Actions tab → `Publish (offline test mode)` → Run workflow.
 
 ## Development
 
