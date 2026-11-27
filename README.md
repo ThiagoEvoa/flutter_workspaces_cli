@@ -9,7 +9,7 @@ A command-line tool for scaffolding and managing monorepo-style Flutter workspac
 - ➕ **Add Package**: Easily add new packages to your existing workspace with a single command.
 - 📱 **Flutter App Scaffolding**: Generates a main Flutter application that imports and uses the core package.
 - 🎯 **Workspace Resolution**: Configures `pubspec.yaml` files with workspace resolution for monorepo support.
-- 🔍 **Environment Validation**: Verifies that the Flutter toolchain on PATH bundles a supported Dart SDK (>= 3.6.0) and uses that same version for every generated manifest.
+- 🔍 **Environment Validation**: Verifies that the Flutter toolchain on PATH bundles a supported Dart SDK (>= 3.12.0 for Flutter >= 3.44.0) and uses that same version for every generated manifest.
 - 📋 **Dependency Management**: Automatically adds common Flutter dependencies (cupertino_icons, flutter_lints).
 - 🧹 **Error Handling**: Reverts workspace creation on failure for clean error states.
 - 🏗️ **SOLID Architecture**: Refactored to use Dependency Injection with `FileSystem` and `ProcessRunner` abstractions for better testability and maintainability.
@@ -19,8 +19,10 @@ A command-line tool for scaffolding and managing monorepo-style Flutter workspac
 Two different Dart requirements apply, and they are not the same:
 
 - **CLI installation** (the `flutter_workspaces_cli` package itself): [Dart SDK](https://dart.dev/get-dart) `^3.11.5` (per this package's own `pubspec.yaml` `environment.sdk`) plus the [Flutter SDK](https://docs.flutter.dev/get-started/install) required to use the CLI.
-- **Flutter toolchain used for generation** (the `flutter` executable on PATH that scaffolds and resolves the workspaces): must bundle a Dart SDK `>= 3.6.0`. The CLI detects that version (machine-readable `flutter --version --machine`, with a text-parse fallback) and serializes it into every generated manifest. Workspace glob syntax (`packages/*`) is emitted only when the bundled Dart SDK is `>= 3.11` (both the resolver and the generated workspace constraint support it); older toolchains generate explicit member lists (`packages/core`).
+- **Flutter toolchain used for generation** (the `flutter` executable on PATH that scaffolds and resolves the workspaces): must bundle a Dart SDK `>= 3.12.0` (Flutter `>= 3.44.0`, the oldest stable toolchain bundling that Dart). The CLI detects that version (machine-readable `flutter --version --machine`, with a text-parse fallback) and serializes it into every generated manifest. Every generated workspace pins both `environment.sdk: ^<detected>` (e.g. `^3.12.0`) and `flutter: ">=3.44.0"`, and emits the workspace glob layout (`packages/*`) — the floor toolchain bundles Dart 3.12.0, which supports the glob syntax, so no older explicit-member-list layout is generated.
 - **System**: macOS, Linux, or Windows with shell support
+
+A toolchain below the floor is rejected with an error that names both the detected Dart version and the required minimum (3.12.0 / Flutter 3.44.0), before any filesystem writes happen — no `my_app_workspaces` directory is created, no manifest is written or rewritten, and no lockfile is changed (the same rejection applies to `setup` and `add-package`; `add-package` still performs its read-only manifest validation and target-reservation check first).
 
 ## Installation
 
@@ -189,7 +191,7 @@ The package supports Dart `>= 3.11.5` (per `pubspec.yaml` `environment.sdk`). Th
 
 #### Local smoke replication
 
-The CI `smoke` job scaffolds a workspace with the real CLI, then analyzes and tests the generated app, core package, and an added package. To replicate it locally in a clean directory:
+The CI `smoke` job scaffolds a workspace with the real CLI, then analyzes and tests the generated app, core package, and an added package. The matrix runs the floor toolchain and the current stable on both Ubuntu and Windows: Flutter `3.44.0` (Dart 3.12.0, the minimum supported) and Flutter `3.50.1` (Dart 3.14.0, current stable). To replicate it locally in a clean directory:
 
 ```bash
 rm -rf /tmp/issue17-smoke && mkdir -p /tmp/issue17-smoke && cd /tmp/issue17-smoke

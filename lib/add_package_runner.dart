@@ -102,6 +102,14 @@ class AddPackageRunner {
         );
       }
 
+      // Detect the Flutter toolchain's Dart version BEFORE any mutation or
+      // filesystem effect: a below-floor toolchain is rejected here, before
+      // the reserved directory exists and before the root manifest or
+      // lockfile is read or rewritten. A read-only manifest validation and
+      // target reservation (above) deliberately run first, so an occupied or
+      // missing target never triggers a Flutter/Dart process.
+      final dartVersion = dart.getDartVersionSync();
+
       // Capture state BEFORE mutating anything: the original root manifest
       // content and the pre-existing lockfile (content or absence). Rollback
       // restores exactly what this invocation changed.
@@ -113,8 +121,6 @@ class AddPackageRunner {
           : null;
       reservedDirectory = targetDir;
       didCaptureState = true;
-
-      final dartVersion = dart.getDartVersionSync();
 
       packageProcess.createPackageSync(packageName: packageName);
       packageProcess.updatePubspecSync(
