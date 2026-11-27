@@ -46,6 +46,37 @@ void main() {
         throwsArgumentError,
       );
     });
+
+    group('reserved Dart words (Issue #32)', () {
+      test('every word in kReservedDartWords is rejected by the validator', () {
+        for (final word in kReservedDartWords) {
+          expect(
+            () => validateProjectName(word),
+            throwsArgumentError,
+            reason: 'the reserved word "$word" must be rejected',
+          );
+          expect(
+            () => validateProjectName(word),
+            throwsA(
+              isA<ArgumentError>().having(
+                (e) => e.message,
+                'message',
+                contains('must not be a reserved Dart word'),
+              ),
+            ),
+            reason: 'the reserved word "$word" must name the rule',
+          );
+        }
+      });
+
+      test('non-reserved names still pass (class_tools, help, int)', () {
+        expect(() => validateProjectName('class_tools'), returnsNormally);
+        expect(() => validateProjectName('help'), returnsNormally);
+        // `int` is a built-in type, not a reserved word; Flutter's package-name
+        // validation does not reject it.
+        expect(() => validateProjectName('int'), returnsNormally);
+      });
+    });
   });
 
   group('DartProcess', () {
@@ -3819,6 +3850,230 @@ dependencies:
       expect(errors, contains(contains('must start with a lowercase letter')));
       expect(errors, contains(contains('Usage:')));
       expect(logs, isNot(contains(contains('Usage:'))));
+    });
+
+    // Issue #32: reserved Dart names are rejected before setup or add-package
+    // starts — exit 64, an actionable error + the command's usage on stderr,
+    // and no filesystem or subprocess effects.
+    group('Reserved Dart names (Issue #32)', () {
+      // Names rejected by Flutter's package-name validation
+      // (`flutter create --template=package`): the `_keywords` set in the
+      // Flutter tool's create_base.dart, the operative set for the `flutter`
+      // invocations this CLI drives. Covers the issue's example (`class`) plus
+      // a mix of standard keywords, contextual keywords Flutter rejects, and
+      // contextual keywords pub allows but Flutter still rejects.
+      const reservedNames = [
+        'class',
+        'static',
+        'extension',
+        'dynamic',
+        'get',
+        'function',
+        'inout',
+        'sync',
+        'await',
+        'yield',
+      ];
+
+      for (final name in reservedNames) {
+        test(
+          'setup: reserved name "$name" exits 64 with usage, no effects',
+          () {
+            final initialDir = fs.directory('/test_$name')..createSync();
+            fs.currentDirectory = initialDir;
+            final cli = buildCli();
+
+            expect(cli.run(['--name', name]), 64);
+
+            expect(
+              errors,
+              contains(contains('must not be a reserved Dart word')),
+              reason: 'setup --name $name',
+            );
+            expect(
+              errors,
+              contains(
+                contains('Usage: flutter_workspaces_cli [setup] --name <name>'),
+              ),
+              reason: 'setup --name $name',
+            );
+            expect(logs, isNot(contains(contains('Usage:'))));
+            // No workspace folder, sentinel, or other file is created.
+            expect(fs.directory('/test_$name').listSync(), isEmpty);
+            verifyNever(() => runner.runSync(any(), any()));
+          },
+        );
+
+        test(
+          'add-package: reserved name "$name" exits 64 with usage, no effects',
+          () {
+            fs.directory('packages').createSync();
+            fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
+            final cli = buildCli();
+
+            expect(cli.run(['add-package', '--name', name]), 64);
+
+            expect(
+              errors,
+              contains(contains('must not be a reserved Dart word')),
+              reason: 'add-package --name $name',
+            );
+            expect(
+              errors,
+              contains(
+                contains(
+                  'Usage: flutter_workspaces_cli add-package --name <name>',
+                ),
+              ),
+              reason: 'add-package --name $name',
+            );
+            expect(logs, isNot(contains(contains('Usage:'))));
+            // No package directory, no sentinel, manifests untouched.
+            expect(fs.directory('packages').listSync(), isEmpty);
+            expect(
+              fs.file('pubspec.yaml').readAsStringSync(),
+              equals('workspace:\n  - my_app'),
+            );
+            verifyNever(() => runner.runSync(any(), any()));
+          },
+        );
+      }
+
+      test('setup: reserved name "class" via -n exits 64 with usage', () {
+        final initialDir = fs.directory('/test_class_short')..createSync();
+        fs.currentDirectory = initialDir;
+        final cli = buildCli();
+
+        expect(cli.run(['-n', 'class']), 64);
+
+        expect(errors, contains(contains('must not be a reserved Dart word')));
+        expect(fs.directory('/test_class_short').listSync(), isEmpty);
+        verifyNever(() => runner.runSync(any(), any()));
+      });
+
+      test('add-package: reserved name "class" via -n exits 64 with usage', () {
+        fs.directory('packages').createSync();
+        fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
+        final cli = buildCli();
+
+        expect(cli.run(['add-package', '-n', 'class']), 64);
+
+        expect(errors, contains(contains('must not be a reserved Dart word')));
+        expect(fs.directory('packages').listSync(), isEmpty);
+        verifyNever(() => runner.runSync(any(), any()));
+      });
+
+      test(
+        'setup: valid name "class_tools" via --name still reaches the runner',
+        () {
+          final initialDir = fs.directory('/test')..createSync();
+          fs.currentDirectory = initialDir;
+          stubHappySetup();
+
+          final cli = buildCli();
+          expect(cli.run(['--name', 'class_tools']), 0);
+
+          expect(errors, isEmpty);
+          expect(
+            fs.directory('/test/class_tools_workspaces').existsSync(),
+            isTrue,
+          );
+          expect(logs, contains(contains('completed successfully')));
+        },
+      );
+
+      test(
+        'setup: valid name "class_tools" via -n still reaches the runner',
+        () {
+          final initialDir = fs.directory('/test')..createSync();
+          fs.currentDirectory = initialDir;
+          stubHappySetup();
+
+          final cli = buildCli();
+          expect(cli.run(['-n', 'class_tools']), 0);
+
+          expect(errors, isEmpty);
+          expect(
+            fs.directory('/test/class_tools_workspaces').existsSync(),
+            isTrue,
+          );
+          expect(logs, contains(contains('completed successfully')));
+        },
+      );
+
+      test(
+        'add-package: valid name "class_tools" via --name still reaches the runner',
+        () {
+          fs.directory('packages').createSync();
+          fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
+          stubHappyAddPackage();
+
+          final cli = buildCli();
+          expect(cli.run(['add-package', '--name', 'class_tools']), 0);
+
+          expect(errors, isEmpty);
+          expect(
+            logs,
+            contains(contains('Package "class_tools" added successfully!')),
+          );
+          expect(
+            fs.file('packages/class_tools/pubspec.yaml').existsSync(),
+            isTrue,
+          );
+        },
+      );
+
+      test(
+        'add-package: valid name "class_tools" via -n still reaches the runner',
+        () {
+          fs.directory('packages').createSync();
+          fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
+          stubHappyAddPackage();
+
+          final cli = buildCli();
+          expect(cli.run(['add-package', '-n', 'class_tools']), 0);
+
+          expect(errors, isEmpty);
+          expect(
+            logs,
+            contains(contains('Package "class_tools" added successfully!')),
+          );
+          expect(
+            fs.file('packages/class_tools/pubspec.yaml').existsSync(),
+            isTrue,
+          );
+        },
+      );
+
+      test(
+        'setup: "int" (built-in type, not a reserved word) reaches the runner',
+        () {
+          final initialDir = fs.directory('/test')..createSync();
+          fs.currentDirectory = initialDir;
+          stubHappySetup();
+
+          final cli = buildCli();
+          expect(cli.run(['--name', 'int']), 0);
+
+          expect(errors, isEmpty);
+          expect(fs.directory('/test/int_workspaces').existsSync(), isTrue);
+        },
+      );
+
+      test(
+        'add-package: "int" (built-in type, not a reserved word) reaches the runner',
+        () {
+          fs.directory('packages').createSync();
+          fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
+          stubHappyAddPackage();
+
+          final cli = buildCli();
+          expect(cli.run(['add-package', '--name', 'int']), 0);
+
+          expect(errors, isEmpty);
+          expect(fs.file('packages/int/pubspec.yaml').existsSync(), isTrue);
+        },
+      );
     });
 
     test('unknown flag --nope: exits 64 with usage on stderr', () {
