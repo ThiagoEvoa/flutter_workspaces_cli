@@ -127,6 +127,60 @@ class FakeProcessRunner implements ProcessRunner {
   }
 }
 
+/// Best-effort "make [dir] non-writable on the real OS" that works where the
+/// platform enforces directory write permissions and *reports honestly* where it
+/// does not.
+///
+/// It clears the write bits via the platform `chmod` program (`chmod 500`, i.e.
+/// read + execute only) and then probes by attempting a real exclusive create of
+/// a probe file inside the directory. The probe is the authority: when it
+/// *succeeds* the platform did not gate the write (notably Windows, where
+/// `chmod` is absent or does not enforce directory write protection for a
+/// non-elevated account) and the function returns `false` so the caller can
+/// skip the test instead of producing a false result. When the probe *fails*,
+/// the directory is genuinely non-writable and `true` is returned, guaranteeing
+/// the caller's `createSync(exclusive: true)` will hit a real permission/IO
+/// error (not contention). On the POSIX runners/hosts that enforce `chmod` this
+/// always returns `true`.
+///
+/// It invokes the `chmod` *program* rather than `dart:io`'s
+/// `FileSystemEntity.chmod` deliberately: the Flutter-bundled `dart:io` used by
+/// `dart test` on this host (and inside the workspaces the CLI generates) does
+/// not expose that API, while the standalone Dart used by the CI `Real-FS` job
+/// does. Driving the probe through the real create keeps the assertion honest on
+/// every platform without depending on a specific `dart:io` surface. Callers
+/// must restore the write bit with [restoreDirWritable] before the parent can be
+/// cleaned up.
+bool makeRealDirNonWritable(io.Directory dir) {
+  try {
+    io.Process.runSync('chmod', ['500', dir.path]);
+  } catch (_) {
+    // No `chmod` available (e.g. Windows): fall through to the probe, which
+    // reports the directory is still writable and lets the caller skip.
+  }
+  final probe = io.File('${dir.path}/.fws_write_probe');
+  try {
+    probe.createSync(exclusive: true);
+    // The write succeeded: not enforceable here.
+    probe.deleteSync();
+    return false;
+  } catch (_) {
+    // The write failed: the directory is genuinely non-writable.
+    return true;
+  }
+}
+
+/// Restores the write bit on [dir] so its parent can be cleaned up. Best-effort:
+/// a failure to restore (e.g. no `chmod`) is swallowed because the parent
+/// directory remains writable regardless, so teardown can still delete the tree.
+void restoreDirWritable(io.Directory dir) {
+  try {
+    io.Process.runSync('chmod', ['700', dir.path]);
+  } catch (_) {
+    // No `chmod`; the parent stays writable, so cleanup is unaffected.
+  }
+}
+
 void main() {
   late String originalCwd;
   late io.Directory tempDir;
@@ -291,6 +345,62 @@ void main() {
         isFalse,
       );
       expect(notesFile.readAsStringSync(), equals('keep me'));
+    });
+
+    test('setup in a non-writable directory surfaces the permission/IO diagnostic '
+        '(ioError, not contended), creating nothing', () {
+      // Force a genuine permission/IO error (not contention): the workspace
+      // sentinel is created in the invocation directory, so a non-writable
+      // invocation directory makes the exclusive create fail with a real
+      // filesystem error. This exercises the runner-level ioError branch of
+      // [WorkspaceProcess.createWorkspaceFolderSync] (the "could not be
+      // reserved" diagnostic) that the raw-exception tests in
+      // test/reservation_test.dart do not reach through a runner.
+      final invocationDir = io.Directory('${tempDir.path}/readonly_invocation');
+      invocationDir.createSync();
+      // Skip honestly where the platform cannot enforce a non-writable directory
+      // (e.g. Windows, where chmod does not gate writes for a non-elevated
+      // account); on POSIX the probe confirms it is genuinely non-writable, so
+      // the createSync that follows hits a real permission/IO error.
+      final nonWritable = makeRealDirNonWritable(invocationDir);
+      if (!nonWritable) {
+        markTestSkipped(
+          'chmod cannot enforce a non-writable directory on this platform '
+          '(e.g. Windows); the ioError runner path is verified on the POSIX '
+          'CI leg.',
+        );
+        return;
+      }
+      try {
+        fs.currentDirectory = invocationDir;
+
+        final logs = <String>[];
+        expect(
+          () => SetupRunner(
+            fs: fs,
+            runner: FakeProcessRunner(fs: fs),
+            log: (m) => logs.add(m),
+            errorLog: (m) => logs.add(m),
+          ).run(['--name', 'my_app']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // The ioError runner diagnostic surfaced (not the contended one),
+        // naming the affected sentinel path.
+        expect(logs, contains(contains('could not be reserved')));
+        expect(logs, contains(contains('permission or file-system error')));
+        expect(logs, isNot(contains('already reserved or occupied')));
+
+        // Nothing was created in the non-writable invocation directory: no
+        // workspace folder and no sentinel left behind.
+        expect(fs.directory('my_app_workspaces').existsSync(), isFalse);
+        expect(fs.file('my_app_workspaces').existsSync(), isFalse);
+      } finally {
+        // Restore the write bit so the parent can clean up the temp tree, and
+        // restore the process working directory out of the invocation dir.
+        restoreDirWritable(invocationDir);
+        fs.currentDirectory = tempDir;
+      }
     });
   });
 
@@ -477,6 +587,69 @@ void main() {
         fs.file(tempPath('pubspec.yaml')).readAsStringSync(),
         equals('workspace:\n  - app\n'),
       );
+    });
+
+    test('add-package in a non-writable packages directory surfaces the '
+        'permission/IO diagnostic (ioError, not contended), touching nothing', () {
+      // Force a genuine permission/IO error (not contention): the per-package
+      // sentinel is created in the `packages` directory, so a non-writable
+      // `packages` makes the exclusive create fail with a real filesystem
+      // error. This exercises the runner-level ioError branch of
+      // [AddPackageRunner] (the "could not be reserved" diagnostic) that the
+      // raw-exception tests in test/reservation_test.dart do not reach through
+      // a runner.
+      layoutWorkspace();
+      final packagesDir = io.Directory(tempPath('packages'));
+      // Skip honestly where the platform cannot enforce a non-writable directory
+      // (e.g. Windows, where chmod does not gate writes for a non-elevated
+      // account); on POSIX the probe confirms it is genuinely non-writable.
+      final nonWritable = makeRealDirNonWritable(packagesDir);
+      if (!nonWritable) {
+        markTestSkipped(
+          'chmod cannot enforce a non-writable directory on this platform '
+          '(e.g. Windows); the ioError runner path is verified on the POSIX '
+          'CI leg.',
+        );
+        return;
+      }
+      try {
+        final logs = <String>[];
+        expect(
+          () => AddPackageRunner(
+            fs: fs,
+            runner: FakeProcessRunner(fs: fs),
+            log: (m) => logs.add(m),
+            errorLog: (m) => logs.add(m),
+          ).run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // The ioError runner diagnostic surfaced (not the contended one),
+        // naming the affected sentinel path.
+        expect(logs, contains(contains('could not be reserved')));
+        expect(logs, contains(contains('permission or file-system error')));
+        expect(logs, isNot(contains('already reserved')));
+
+        // Nothing was created or changed: no package directory, the manifest is
+        // untouched, and no sentinel was left behind (the pre-existing broken
+        // link inside packages/ is never touched either).
+        expect(
+          fs.directory(tempPath('packages/new_pkg')).existsSync(),
+          isFalse,
+        );
+        expect(
+          fs.file(tempPath('pubspec.yaml')).readAsStringSync(),
+          equals('workspace:\n  - app\n'),
+        );
+        expect(
+          fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
+          isFalse,
+        );
+      } finally {
+        // Restore the write bit so the temp tree (including the pre-existing
+        // broken link inside packages/) can be cleaned up.
+        restoreDirWritable(packagesDir);
+      }
     });
   });
 

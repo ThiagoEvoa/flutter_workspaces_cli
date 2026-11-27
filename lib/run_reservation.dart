@@ -115,6 +115,15 @@ class DartIoReservationBackend implements ReservationBackend {
 
   @override
   void claim(String sentinelPath) {
+    // Always uses the real OS via `dart:io` and takes no [FileSystem] at all:
+    // this backend is only ever selected for a real `LocalFileSystem` (see
+    // `backendFor`), and [sentinelPath] is already an absolute OS path
+    // (derived from `fs.currentDirectory.path`), so there is no base-rooted or
+    // forwarded filesystem to honor. The latent coupling a reviewer flagged is
+    // therefore inert today: it would matter only if a base-rooted/forwarded
+    // `LocalFileSystem` were ever routed to this backend, which the current
+    // selection never does. It is documented here so that coupling is a
+    // deliberate, visible choice rather than a latent surprise.
     io.File(sentinelPath).createSync(exclusive: true);
   }
 
@@ -242,6 +251,22 @@ class RunReservation {
       // permission/IO reason. The existence check is best-effort — if it
       // cannot be determined, treat it as a genuine failure rather than a
       // collision.
+      //
+      // Known diagnostic-only edge: the classification is a single, point-in-
+      // time existence probe run *after* the failed create. If a contending
+      // run releases (deletes) its sentinel in the tiny window between this
+      // loser's failed create and this probe, the probe sees "not claimed"
+      // and the loser is labeled [ReservationAcquisitionFailure.ioError]
+      // instead of [ReservationAcquisitionFailure.contended]. That
+      // misclassification is harmless: the loser still throws and refuses
+      // identically (one owner is preserved either way) — only the *wording*
+      // of the diagnostic differs. The window is practically nil because the
+      // winner holds the sentinel for the entire slow operation (scaffold /
+      // dependency resolution), so it will not have finished and released by
+      // the time the loser's microsecond-later probe runs. Closing it would
+      // require a fundamentally different primitive (e.g. a re-check coupled
+      // to the release), so it is documented rather than "fixed"; it never
+      // changes the refusal outcome.
       final occupied = _tryIsClaimed(effectiveBackend, sentinelPath);
       throw ReservationAcquisitionException(
         failure: occupied
