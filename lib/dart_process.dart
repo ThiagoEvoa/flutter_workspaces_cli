@@ -19,7 +19,21 @@ class DartProcess {
 
   /// Minimum Dart SDK version bundled with the Flutter toolchain that this
   /// CLI supports.
-  static const String supportedMinimumVersion = '3.6.0';
+  ///
+  /// The floor is Dart 3.12.0: the generated workspace pins
+  /// `material_ui: ^1.1.0`, which requires Dart ^3.12.0 (and Flutter >= 3.44.0),
+  /// so any older toolchain would produce manifests that cannot resolve.
+  /// The [supportedMinimumFlutterVersion] constant (Flutter 3.44.0) bundles
+  /// this Dart and is declared in every generated manifest.
+  static const String supportedMinimumVersion = '3.12.0';
+
+  /// Minimum Flutter toolchain version declared in the generated manifests.
+  ///
+  /// Flutter 3.44.0 is the first stable toolchain shipping Dart 3.12.0 (the
+  /// floor) and the oldest toolchain that can resolve the generated
+  /// `material_ui: ^1.1.0` app manifests. Later stable toolchains also pass:
+  /// they bundle a newer Dart and satisfy the same floor.
+  static const String supportedMinimumFlutterVersion = '3.44.0';
 
   /// Returns the bare semantic Dart version string (e.g. `3.10.8`) bundled
   /// with the Flutter toolchain used by the CLI.
@@ -38,7 +52,7 @@ class DartProcess {
   /// - [Exception] when the version cannot be determined (machine output
   ///   unusable and text output unparseable), when the version is malformed
   ///   or prerelease, or when the version is below the supported minimum
-  ///   (3.6.0). The message states what failed and that the version comes
+  ///   (3.12.0, see [supportedMinimumVersion]). The message states what failed and that the version comes
   ///   from the Flutter toolchain, not a PATH `dart`.
   String getDartVersionSync() {
     log('🔍 Checking Flutter toolchain Dart version...');
@@ -193,7 +207,7 @@ class DartProcess {
       throw _invalidVersionException(version);
     }
 
-    if (major < 3 || (major == 3 && minor < 6)) {
+    if (_isBelowFloor(major, minor, patch)) {
       throw Exception(
         '⚠️ The Flutter toolchain bundles Dart $version, which is below the supported '
         'minimum of $supportedMinimumVersion. '
@@ -206,6 +220,18 @@ class DartProcess {
 
     log('✅ Flutter toolchain Dart version: $version');
     return version;
+  }
+
+  /// Returns true when ([major], [minor], [patch]) sorts strictly below the
+  /// supported toolchain floor declared by [supportedMinimumVersion].
+  bool _isBelowFloor(int major, int minor, int patch) {
+    final floor = supportedMinimumVersion.split('.');
+    final floorMajor = int.parse(floor[0]);
+    final floorMinor = int.parse(floor[1]);
+    final floorPatch = int.parse(floor[2]);
+    if (major != floorMajor) return major < floorMajor;
+    if (minor != floorMinor) return minor < floorMinor;
+    return patch < floorPatch;
   }
 
   Exception _invalidVersionException(String version) {

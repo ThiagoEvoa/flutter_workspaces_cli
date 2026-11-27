@@ -38,7 +38,7 @@ jobs:
         run: dart test
 
   smoke:
-    name: Smoke (${{ matrix.os }})
+    name: Smoke (${{ matrix.os }} / Flutter ${{ matrix.flutter-version }})
     needs: check
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -48,8 +48,16 @@ jobs:
         include:
           - os: ubuntu-latest
             shell: bash
+            flutter-version: "3.44.0"
           - os: windows-latest
             shell: pwsh
+            flutter-version: "3.44.0"
+          - os: ubuntu-latest
+            shell: bash
+            flutter-version: "3.50.1"
+          - os: windows-latest
+            shell: pwsh
+            flutter-version: "3.50.1"
     defaults:
       run:
         shell: ${{ matrix.shell }}
@@ -59,7 +67,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.50.1"
+          flutter-version: ${{ matrix.flutter-version }}
           channel: stable
 
       - name: Resolve CLI dependencies

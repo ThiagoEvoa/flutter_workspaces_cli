@@ -1,5 +1,6 @@
 import 'package:file/file.dart';
 import 'package:yaml/yaml.dart';
+import 'dart_process.dart';
 import 'process_runner.dart';
 
 /// A validated root workspace manifest.
@@ -572,11 +573,10 @@ class WorkspaceProcess {
     required String projectName,
   }) {
     log('📝 Creating root pubspec.yaml...');
-    final isDart311OrHigher = _isVersionAtLeast(dartVersion, 3, 11);
 
-    final workspaceSection = isDart311OrHigher
-        ? '  - $projectName\n  - packages/*'
-        : '  - $projectName\n  - packages/core';
+    // Every supported toolchain (Dart >= 3.12, bundled by Flutter >= 3.44.0)
+    // supports workspace glob syntax, so the glob layout is always emitted.
+    final workspaceSection = '  - $projectName\n  - packages/*';
 
     final content =
         '''
@@ -587,6 +587,7 @@ publish_to: none
 
 environment:
   sdk: ^$dartVersion
+  flutter: ">=${DartProcess.supportedMinimumFlutterVersion}"
 
 workspace:
 $workspaceSection
@@ -791,24 +792,5 @@ dev_dependencies:
         throw Exception('⚠️ Failed to move $fileName');
       }
     }
-  }
-
-  bool _isVersionAtLeast(
-    String version,
-    int majorThreshold,
-    int minorThreshold,
-  ) {
-    final cleanVersion = version.startsWith('^')
-        ? version.substring(1)
-        : version;
-    final parts = cleanVersion.split('.');
-    if (parts.isEmpty) return false;
-
-    final major = int.tryParse(parts[0]) ?? 0;
-    final minor = parts.length > 1 ? (int.tryParse(parts[1]) ?? 0) : 0;
-
-    if (major > majorThreshold) return true;
-    if (major == majorThreshold && minor >= minorThreshold) return true;
-    return false;
   }
 }

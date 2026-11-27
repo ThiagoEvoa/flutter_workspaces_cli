@@ -1,4 +1,5 @@
 import 'package:file/file.dart';
+import 'dart_process.dart';
 import 'process_runner.dart';
 
 /// Helpers to create and configure a Flutter application inside the workspace.
@@ -205,6 +206,7 @@ version: 1.0.0+1
 
 environment:
   sdk: ^$dartVersion
+  flutter: ">=${DartProcess.supportedMinimumFlutterVersion}"
 
 resolution: workspace
 

@@ -1,4 +1,5 @@
 import 'package:file/file.dart';
+import 'dart_process.dart';
 import 'process_runner.dart';
 
 /// Helpers to create and configure a new package inside `packages/`.
@@ -60,7 +61,7 @@ homepage:
 
 environment:
   sdk: ^$dartVersion
-  flutter: ">=1.17.0"
+  flutter: ">=${DartProcess.supportedMinimumFlutterVersion}"
 
 resolution: workspace
 
