@@ -1,9 +1,0 @@
-# Serializes the whole suite: the real-filesystem test group (test/
-# flutter_workspaces_cli_real_fs_test.dart) exercises the CLI's real `fs`
-# wiring, which sets the process working directory (package:file's
-# LocalFileSystem mutates dart:io's Directory.current). Tests in other files
-# that read cwd-relative paths (e.g. publish_workflow_test.dart) would race
-# with that mutation when test files run concurrently. The suite is fully
-# synchronous, so serialization costs ~1s; keep it serial rather than leave
-# cwd-dependent tests flaky.
-concurrency: 1

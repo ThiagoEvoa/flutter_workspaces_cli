@@ -1,5 +1,6 @@
 import 'package:file/file.dart';
 import 'package:flutter_workspaces_cli/flutter_workspaces_cli.dart';
+import 'package:flutter_workspaces_cli/run_reservation.dart';
 
 /// Runner that orchestrates the workspace setup workflow.
 class SetupRunner {

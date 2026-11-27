@@ -3,6 +3,7 @@ import 'dart:io' as io;
 import 'package:file/file.dart';
 import 'package:file/memory.dart';
 import 'package:flutter_workspaces_cli/flutter_workspaces_cli.dart';
+import 'package:flutter_workspaces_cli/run_reservation.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:test/test.dart';
 
@@ -1430,12 +1431,16 @@ workspace:
       final logs2 = <String>[];
 
       // Sentinel links used by the workspace lock (acquire + release) and the
-      // destination reservation; release is a no-op when the sentinel does not
-      // exist (as mocked).
+      // destination reservation. The stub is stateful: acquisition records the
+      // sentinel as created so release actually deletes it (a plain
+      // existsSync()→false stub would make release a silent no-op).
       final sentinelLink = MockLink();
+      var sentinelCreated = false;
       when(() => mockFs.link(any())).thenReturn(sentinelLink);
-      when(() => sentinelLink.createSync(any())).thenAnswer((_) {});
-      when(() => sentinelLink.existsSync()).thenReturn(false);
+      when(() => sentinelLink.createSync(any())).thenAnswer((_) {
+        sentinelCreated = true;
+      });
+      when(() => sentinelLink.existsSync()).thenAnswer((_) => sentinelCreated);
       // Let the rollback's root-pubspec restore exercise cleanly on the mock.
       when(() => rootFile.writeAsStringSync(any())).thenAnswer((_) {});
 
@@ -1508,6 +1513,9 @@ workspace:
       expect(logs2, contains(contains('create')));
       expect(logs2, contains(contains('Cleanup also failed')));
       expect(logs2, contains(contains('cannot delete reserved directory')));
+      // Both the destination reservation and the workspace lock are released:
+      // release() deletes the sentinel once per raised reservation.
+      verify(() => sentinelLink.deleteSync()).called(2);
     });
 
     test('failure while writing the package pubspec rolls back cleanly', () {
@@ -1523,12 +1531,15 @@ workspace:
       final runner2 = MockProcessRunner();
       final logs2 = <String>[];
       // Sentinel links used by the workspace lock (acquire + release) and the
-      // destination reservation; release is a no-op when the sentinel does not
-      // exist (as mocked).
+      // destination reservation. The stub is stateful: acquisition records the
+      // sentinel as created so release actually deletes it.
       final sentinelLink = MockLink();
+      var sentinelCreated = false;
       when(() => mockFs.link(any())).thenReturn(sentinelLink);
-      when(() => sentinelLink.createSync(any())).thenAnswer((_) {});
-      when(() => sentinelLink.existsSync()).thenReturn(false);
+      when(() => sentinelLink.createSync(any())).thenAnswer((_) {
+        sentinelCreated = true;
+      });
+      when(() => sentinelLink.existsSync()).thenAnswer((_) => sentinelCreated);
       const originalContent = 'workspace:\n  - app\n';
       const originalLockContent = 'ORIGINAL-LOCK\n';
       var reservedDirExists = false;
@@ -1618,6 +1629,8 @@ workspace:
       // The reserved package directory is removed.
       expect(reservedDirExists, isFalse);
       verify(() => reservedDir.deleteSync(recursive: true)).called(1);
+      // The destination reservation and the workspace lock were both released.
+      verify(() => sentinelLink.deleteSync()).called(2);
     });
 
     test('creation failure (flutter create nonzero exit) leaves the workspace '
@@ -2048,12 +2061,16 @@ workspace:
       final runner2 = MockProcessRunner();
       final logs2 = <String>[];
 
-      // The workspace reservation sentinel link; release is a no-op when the
-      // sentinel does not exist (as mocked).
+      // The workspace reservation sentinel link. The stub is stateful:
+      // acquisition records the sentinel as created so release actually
+      // deletes it.
       final sentinelLink = MockLink();
+      var sentinelCreated = false;
       when(() => mockFs.link(any())).thenReturn(sentinelLink);
-      when(() => sentinelLink.createSync(any())).thenAnswer((_) {});
-      when(() => sentinelLink.existsSync()).thenReturn(false);
+      when(() => sentinelLink.createSync(any())).thenAnswer((_) {
+        sentinelCreated = true;
+      });
+      when(() => sentinelLink.existsSync()).thenAnswer((_) => sentinelCreated);
 
       // currentDirectory reads return baseDir; the restore setter is a no-op on
       // the mock, so the rollback path exercises without touching it.
@@ -2122,6 +2139,8 @@ workspace:
       expect(logs2, contains(contains('Failed to create Flutter app')));
       expect(logs2, contains(contains('Cleanup also failed')));
       expect(logs2, contains(contains('cannot delete reserved directory')));
+      // The workspace reservation sentinel is deleted on the failure exit path.
+      verify(() => sentinelLink.deleteSync()).called(1);
     });
 
     test('(d) two attempts for the same name: exactly one succeeds, the '
@@ -3966,7 +3985,26 @@ dependencies:
     test(
       'README documents the floor, the glob layout, and the rejection behavior',
       () {
-        final readme = io.File('README.md').readAsStringSync();
+        // Resolve the README relative to this test file's own location, not
+        // the process working directory (the real-filesystem test group
+        // mutates the cwd). `Platform.script` points at the compiled kernel
+        // dump under `dart test`, so the source URI comes from the JIT stack
+        // trace's first frame — that frame is this file.
+        final frameMatch = RegExp(
+          r'\(file://([^)]+)\)',
+        ).firstMatch(StackTrace.current.toString());
+        if (frameMatch == null) {
+          throw StateError(
+            'could not resolve the package root from the stack trace',
+          );
+        }
+        final uriPath = frameMatch
+            .group(1)!
+            .replaceFirst(RegExp(r':(\d+):(\d+)$'), '');
+        final packageRoot = io.File(
+          Uri.parse('file://$uriPath').toFilePath(),
+        ).parent.parent.absolute.path;
+        final readme = io.File('$packageRoot/README.md').readAsStringSync();
 
         // The supported toolchain floor stated in the README matches the
         // constants the CLI enforces and serializes.
@@ -4062,6 +4100,31 @@ dependencies:
         return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
       });
     }
+
+    test('RunReservation: a claimed sentinel is deleted on release '
+        '(success path)', () {
+      final mockFs = MockFileSystem();
+      final sentinel = MockLink();
+      var sentinelCreated = false;
+      when(() => mockFs.link(any())).thenReturn(sentinel);
+      when(() => sentinel.createSync(any())).thenAnswer((_) {
+        sentinelCreated = true;
+      });
+      // existsSync is stateful: false before the claim, true once the
+      // sentinel exists — exactly the lifecycle the real link presents.
+      when(() => sentinel.existsSync()).thenAnswer((_) => sentinelCreated);
+
+      final reservation = RunReservation.acquire(
+        fs: mockFs,
+        sentinelPath: '/work/.my_app_workspaces.reserved',
+        contextLabel: 'the workspace directory "my_app_workspaces"',
+      );
+      expect(sentinelCreated, isTrue);
+
+      // The release actually deletes the sentinel, not a silent no-op.
+      expect(reservation.release(), isNull);
+      verify(() => sentinel.deleteSync()).called(1);
+    });
 
     // ---- synchronized overlaps: same name ----
 

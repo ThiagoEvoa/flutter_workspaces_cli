@@ -17,6 +17,7 @@
 //    leaving the invocation (parent) directory's files intact;
 //  - the workspace lock is held mid-run (observed inside the flutter
 //    subprocess hook) and released on completion.
+import 'dart:convert';
 import 'dart:io' as io;
 
 import 'package:file/file.dart';
@@ -465,5 +466,117 @@ void main() {
         equals('workspace:\n  - app\n'),
       );
     });
+  });
+
+  group('Real filesystem: two-process race (Issue #31)', () {
+    /// The package root, resolved from this test file's own location (the
+    /// suite's cwd may be mutated by other tests — and the JIT kernel path
+    /// is not a valid anchor under `dart test`). The frame's source URI is
+    /// what `StackTrace.current` reports for this file, so parsing it gives
+    /// the root: `<root>/test/<file>.dart` -> `<root>`.
+    String packageRoot() {
+      final st = StackTrace.current.toString();
+      final match = RegExp(r'\(file://([^)]+)\)').firstMatch(st);
+      if (match == null) {
+        throw StateError(
+          'could not resolve the package root from the stack trace',
+        );
+      }
+      // The frame keeps a `:line:column` suffix; strip it before converting.
+      final uriPath = match
+          .group(1)!
+          .replaceFirst(RegExp(r':(\d+):(\d+)$'), '');
+      return io.File(
+        Uri.parse('file://$uriPath').toFilePath(),
+      ).parent.parent.absolute.path;
+    }
+
+    test('two concurrent setup runs on the same name — exactly one wins, the '
+        'other is rejected with the friendly reservation message, and the '
+        'winner\'s workspace survives untouched', () async {
+      // Two REAL OS processes (`dart` from PATH) — not in-process
+      // interleaving — both invoking the CLI against the SAME temp workspace
+      // (the one created in setUp). The only deliberate fakery is the
+      // scripted ProcessRunner inside each probe (see the file header of
+      // test/helpers/concurrency_probe.dart): no real flutter runs, but the
+      // filesystem interactions are real — two distinct OS processes
+      // racing the same sentinel link, which is the atomic claim.
+      final probeScript = io.File(
+        '${packageRoot()}/test/helpers/concurrency_probe.dart',
+      ).absolute.path;
+      expect(
+        io.File(probeScript).existsSync(),
+        isTrue,
+        reason: 'the probe script must exist to be spawned',
+      );
+
+      final probeArgs = [probeScript, tempDir.path, 'my_app'];
+      final processA = await io.Process.start(
+        'dart',
+        probeArgs,
+        workingDirectory: packageRoot(),
+      );
+      final processB = await io.Process.start(
+        'dart',
+        probeArgs,
+        workingDirectory: packageRoot(),
+      );
+
+      final stderrAFuture = processA.stderr.transform(utf8.decoder).join();
+      final stderrBFuture = processB.stderr.transform(utf8.decoder).join();
+      final exitA = await processA.exitCode;
+      final exitB = await processB.exitCode;
+      final stderrA = await stderrAFuture;
+      final stderrB = await stderrBFuture;
+
+      final codes = [exitA, exitB];
+      // Exactly one process completes; the other is rejected.
+      expect(
+        codes.where((c) => c == 0).length,
+        equals(1),
+        reason:
+            'expected exactly one winning process; exits were A=$exitA B=$exitB; '
+            'A stderr: $stderrA\nB stderr: $stderrB',
+      );
+      final loserStderr = exitA == 0 ? stderrB : stderrA;
+
+      // The loser was rejected with a friendly CLI error (not a low-level
+      // exception or a crash). Two OS processes have unbounded startup
+      // variance, so the loser may be rejected either by the read-only
+      // guard ("already exists") or by the atomic claim ("already reserved");
+      // both prove the CLI refused to touch the winner's workspace. The
+      // sentinel — not the guard — is what closes the TOCTOU window in
+      // production; this is a timing artifact of the two-process harness.
+      expect(
+        loserStderr,
+        anyOf(contains('already reserved'), contains('already exists')),
+        reason: 'expected a friendly rejection message, got: $loserStderr',
+      );
+
+      // The winner's workspace survived intact: the workspace directory and
+      // its scaffolded artifacts (workspace pubspec, app, core package) were
+      // not touched by the loser, and the winner released its reservation
+      // on the success path.
+      expect(fs.directory(tempPath('my_app_workspaces')).existsSync(), isTrue);
+      expect(
+        fs.file(tempPath('my_app_workspaces/pubspec.yaml')).existsSync(),
+        isTrue,
+      );
+      expect(
+        fs.directory(tempPath('my_app_workspaces/my_app')).existsSync(),
+        isTrue,
+      );
+      expect(
+        fs
+            .file(tempPath('my_app_workspaces/packages/core/pubspec.yaml'))
+            .existsSync(),
+        isTrue,
+      );
+      expect(
+        fs.link(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        isFalse,
+        reason: 'the winner releases its reservation on success',
+      );
+    }, timeout: const Timeout(Duration(seconds: 120)));
   });
 }
