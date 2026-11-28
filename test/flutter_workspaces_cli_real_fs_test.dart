@@ -17,7 +17,11 @@
 //  - rollback against the real FS removes the reserved directory while
 //    leaving the invocation (parent) directory's files intact;
 //  - the workspace lock is held mid-run (observed inside the flutter
-//    subprocess hook) and released on completion.
+//    subprocess hook) and released on completion;
+//  - setup and add-package coordinate on ONE workspace reservation (Issue #38):
+//    an add-package driven from inside the same workspace *while setup is
+//    still active* is refused before it can snapshot or mutate the half-built
+//    workspace, and a failed setup rolls back only its own output.
 //
 // Issue #37: the claim moved from a symlink to an exclusive regular-file
 // create. On a real filesystem an existing entity (including a stale file
@@ -813,5 +817,267 @@ void main() {
         reason: 'the winner releases its reservation on success',
       );
     }, timeout: const Timeout(Duration(seconds: 120)));
+  });
+
+  // Issue #38: mixed-command coordination. setup and add-package must take ONE
+  // consistent workspace reservation so that an add-package started while setup
+  // is still active for the same workspace refuses before it can snapshot or
+  // mutate the half-built workspace, and so that a failed setup rolls back only
+  // its own output. These are deterministic single-process tests: the
+  // setup runner's createHook is the synchronization point while setup is
+  // active (it holds its reservation AND the workspace lock at that instant),
+  // and a competing add-package is driven *from inside the same workspace*
+  // during that window. The same real-fs file also runs on the CI windows-
+  // latest Real-FS job, which is where the cross-platform (standard-Windows
+  // account) behavior of this exclusive-file reservation is demonstrated.
+  group('Real filesystem: setup vs add-package (Issue #38)', () {
+    // Runs a competing add-package against the workspace that setup is building
+    // *right now* (the caller invokes this from inside setup's createHook, so
+    // setup holds its workspace lock at the call site) and reports whether it
+    // was refused and whether it left any of its own output behind. Its log and
+    // error lines are routed into `logSink` so the test can assert on the
+    // refusal message.
+    //
+    // The competing add-package carries NO createHook and is refused at the
+    // workspace-lock acquire — its first action, before validation, snapshot, or
+    // any write — so its subprocess steps are never reached and it can never
+    // re-enter the setup runner's hook.
+    void runCompetingAddPackage({
+      required String packageName,
+      required List<String> logSink,
+      required void Function(bool refused) onOutcome,
+      required void Function() captureAfterRefusal,
+    }) {
+      var refused = false;
+      try {
+        AddPackageRunner(
+          fs: fs,
+          runner: FakeProcessRunner(fs: fs),
+          log: logSink.add,
+          errorLog: logSink.add,
+        ).run(['--name', packageName]);
+        refused = false;
+      } on ExitException {
+        refused = true;
+      }
+      onOutcome(refused);
+      captureAfterRefusal();
+    }
+
+    test('add-package is refused while setup is active; a successful setup lets the '
+        'same add-package retry complete', () {
+      // A file in the invocation parent that no workspace write may touch.
+      final notesFile = fs.file(tempPath('notes.txt'))
+        ..writeAsStringSync('keep me');
+
+      var refusedDuringActiveSetup = false;
+      var competingScaffoldedPackage = false;
+      var competingWroteManifest = false;
+      var competingWroteLockfile = false;
+
+      // The createHook fires on *every* `flutter create` (app-create and later
+      // core-package create). Drive the competing add-package only on the FIRST
+      // fire — during app-create, while setup holds the lock and has not yet
+      // written the root manifest — so the "left no output" check is measured
+      // against a workspace that does not yet contain setup's own manifest.
+      var ranCompeting = false;
+      final setupRunner = FakeProcessRunner(
+        fs: fs,
+        createHook: (_) {
+          if (ranCompeting) {
+            return;
+          }
+          ranCompeting = true;
+          runCompetingAddPackage(
+            packageName: 'new_pkg',
+            logSink: <String>[],
+            onOutcome: (refused) => refusedDuringActiveSetup = refused,
+            captureAfterRefusal: () {
+              // After the competing add-package returned, did it leave any of
+              // its own output in the half-built workspace? It was refused at
+              // the lock (before any write), so it must have scaffolded no
+              // package and written neither the root manifest nor the lockfile.
+              competingScaffoldedPackage = fs
+                  .directory(tempPath('my_app_workspaces/packages/new_pkg'))
+                  .existsSync();
+              competingWroteManifest = fs
+                  .file(tempPath('my_app_workspaces/pubspec.yaml'))
+                  .existsSync();
+              competingWroteLockfile = fs
+                  .file(tempPath('my_app_workspaces/pubspec.lock'))
+                  .existsSync();
+            },
+          );
+        },
+      );
+
+      // A successful setup, active throughout the competing add-package's run.
+      SetupRunner(
+        fs: fs,
+        runner: setupRunner,
+        log: (_) {},
+        errorLog: (_) {},
+      ).run(['--name', 'my_app']);
+
+      // AC#1: the competing add-package was refused while setup held the lock.
+      expect(
+        refusedDuringActiveSetup,
+        isTrue,
+        reason:
+            'the competing add-package must be refused while setup is active',
+      );
+      // ...and it left none of its own output in the half-built workspace: no
+      // package directory, no root manifest, no lockfile.
+      expect(
+        competingScaffoldedPackage,
+        isFalse,
+        reason: 'a refused add-package must not scaffold into the workspace',
+      );
+      expect(
+        competingWroteManifest,
+        isFalse,
+        reason: 'a refused add-package must not write the root manifest',
+      );
+      expect(
+        competingWroteLockfile,
+        isFalse,
+        reason: 'a refused add-package must not write the lockfile',
+      );
+
+      // A successful setup completed and released BOTH reservations, so the
+      // workspace is fully built and the lock is free.
+      expect(fs.directory(tempPath('my_app_workspaces')).existsSync(), isTrue);
+      expect(
+        fs
+            .file(tempPath('my_app_workspaces/.flutter_workspaces_cli.lock'))
+            .existsSync(),
+        isFalse,
+        reason: 'a completed setup releases the workspace lock',
+      );
+
+      // AC#2: the same add-package that was refused now completes once setup
+      // released the lock. It runs from the workspace root, as a user would.
+      fs.currentDirectory = fs.directory(tempPath('my_app_workspaces'));
+      AddPackageRunner(
+        fs: fs,
+        runner: FakeProcessRunner(fs: fs),
+        log: (_) {},
+      ).run(['--name', 'new_pkg']);
+
+      expect(
+        fs
+            .directory(tempPath('my_app_workspaces/packages/new_pkg'))
+            .existsSync(),
+        isTrue,
+        reason: 'a retry after a successful setup must complete',
+      );
+      expect(notesFile.readAsStringSync(), equals('keep me'));
+    });
+
+    test('a failed setup cleans only its own output while an add-package is '
+        'refused mid-setup', () {
+      final notesFile = fs.file(tempPath('notes.txt'))
+        ..writeAsStringSync('keep me');
+
+      var refusedDuringActiveSetup = false;
+      var competingScaffoldedPackage = false;
+      var competingWroteManifest = false;
+      var competingWroteLockfile = false;
+      final competingLogs = <String>[];
+
+      // As in the success case, drive the competing add-package only on the
+      // first `flutter create` fire, so the message it surfaces is the busy/
+      // retry refusal from the lock contention with the active setup.
+      var ranCompeting = false;
+      final setupRunner = FakeProcessRunner(
+        fs: fs,
+        appCreateExitCode: 2,
+        createHook: (_) {
+          if (ranCompeting) {
+            return;
+          }
+          ranCompeting = true;
+          runCompetingAddPackage(
+            packageName: 'new_pkg',
+            logSink: competingLogs,
+            onOutcome: (refused) => refusedDuringActiveSetup = refused,
+            captureAfterRefusal: () {
+              competingScaffoldedPackage = fs
+                  .directory(tempPath('my_app_workspaces/packages/new_pkg'))
+                  .existsSync();
+              competingWroteManifest = fs
+                  .file(tempPath('my_app_workspaces/pubspec.yaml'))
+                  .existsSync();
+              competingWroteLockfile = fs
+                  .file(tempPath('my_app_workspaces/pubspec.lock'))
+                  .existsSync();
+            },
+          );
+        },
+      );
+
+      final logs = <String>[];
+      expect(
+        () => SetupRunner(
+          fs: fs,
+          runner: setupRunner,
+          log: (m) => logs.add(m),
+          errorLog: (m) => logs.add(m),
+        ).run(['--name', 'my_app']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // The competing add-package was refused while the failing setup held the
+      // lock, and it left no output of its own to be clobbered by the
+      // rollback.
+      expect(
+        refusedDuringActiveSetup,
+        isTrue,
+        reason:
+            'the competing add-package must be refused while setup is active',
+      );
+      expect(
+        competingLogs,
+        contains(contains('already reserved')),
+        reason: 'the refusal must surface a clear busy/retry message',
+      );
+      expect(
+        competingScaffoldedPackage,
+        isFalse,
+        reason: 'a refused add-package must not scaffold into the workspace',
+      );
+      expect(
+        competingWroteManifest,
+        isFalse,
+        reason: 'a refused add-package must not write the root manifest',
+      );
+      expect(
+        competingWroteLockfile,
+        isFalse,
+        reason: 'a refused add-package must not write the root lockfile',
+      );
+
+      // AC#2: the failed setup rolled back ONLY its own output — the workspace
+      // directory and its partial contents are gone, both reservations are
+      // released, and the parent's file (an independent run's output) survives.
+      expect(
+        fs.directory(tempPath('my_app_workspaces')).existsSync(),
+        isFalse,
+        reason: 'a failed setup removes its own reserved directory',
+      );
+      expect(
+        fs.file(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        isFalse,
+        reason: 'a failed setup releases its reservation sentinel',
+      );
+      expect(
+        fs
+            .file(tempPath('my_app_workspaces/.flutter_workspaces_cli.lock'))
+            .existsSync(),
+        isFalse,
+        reason: 'a failed setup releases the workspace lock',
+      );
+      expect(notesFile.readAsStringSync(), equals('keep me'));
+    });
   });
 }

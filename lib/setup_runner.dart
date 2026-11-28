@@ -31,6 +31,10 @@ class SetupRunner {
     String? projectName;
     bool didCreateWorkspace = false;
     RunReservation? reservedReservation;
+    // The workspace-wide lock that add-package also takes (the same
+    // `<workspace>/.flutter_workspaces_cli.lock` path). See the cross-command
+    // coordination note where it is acquired, below.
+    RunReservation? workspaceLock;
 
     try {
       // Remember where we were invoked so the working directory can be restored
@@ -61,6 +65,44 @@ class SetupRunner {
       );
       reservedReservation = reservedWorkspace.reservation;
       didCreateWorkspace = true;
+
+      // Cross-command coordination (Issue #38): the workspace directory now
+      // exists and this run is about to perform the shared writes — the root
+      // manifest, the `packages/` folder, the core package, and dependency
+      // resolution — and may roll them back. Hold the workspace-wide lock that
+      // `add-package` also takes (the *same* `<workspace>/.flutter_workspaces_cli.lock`
+      // path it acquires first thing) for the entire remaining workflow, through
+      // every shared write and any rollback, so an `add-package` started against
+      // this same workspace *while setup is still active* contends on the lock
+      // and refuses before it can snapshot or mutate the half-built workspace.
+      //
+      // The lock lives inside the just-reserved directory (created exclusively by
+      // the sentinel claim above), so no other run can be inside it: the claim is
+      // uncontended in production and is an ordinary exclusive *file* create — the
+      // same standard-Windows-safe primitive as #37 (no symlink, no elevated
+      // token). It is released on every exit path in `finally`, after rollback,
+      // so a completed or failed setup never blocks a later retry or a different
+      // workspace.
+      try {
+        workspaceLock = RunReservation.acquire(
+          fs: fs,
+          sentinelPath:
+              '${fs.currentDirectory.path}/.flutter_workspaces_cli.lock',
+          contextLabel: 'the workspace lock',
+        );
+      } on ReservationAcquisitionException catch (e) {
+        // Uncontended in production (the directory was just reserved
+        // exclusively), but if another run is in progress or a stale lock was
+        // left behind, refuse with a clear busy/retry message and let the outer
+        // handler roll back this run's own output.
+        throw Exception(
+          '⚠️ The workspace lock is already reserved: another '
+          'flutter_workspaces_cli run is in progress on this workspace, or a '
+          'previous run was interrupted and left a reservation behind at '
+          '"${e.sentinelPath}". If no other run is in progress, remove that '
+          'file manually and retry. Aborting setup. Details: ${e.underlying}',
+        );
+      }
 
       flutterApp.createFlutterAppSync(projectName: projectName);
 
@@ -133,7 +175,7 @@ class SetupRunner {
       }
       throw ExitException(1);
     } finally {
-      // Release the reservation sentinel on EVERY exit path, so the next run
+      // Release the reservation sentinels on EVERY exit path, so the next run
       // (retry or a new invocation) is never blocked by a claim this run no
       // longer holds — whether the setup succeeded, failed, or was rolled back.
       // A release failure is logged, not thrown, so the original failure (and
@@ -145,6 +187,16 @@ class SetupRunner {
           errorLog(
             '⚠️ Failed to release the workspace reservation at '
             '"${reservation.sentinelPath}": $releaseError',
+          );
+        }
+      }
+      final lock = workspaceLock;
+      if (lock != null) {
+        final releaseError = lock.release();
+        if (releaseError != null) {
+          errorLog(
+            '⚠️ Failed to release the workspace lock at '
+            '"${lock.sentinelPath}": $releaseError',
           );
         }
       }
