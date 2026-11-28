@@ -373,73 +373,31 @@ int _lineIndexOfOffset(List<_Line> lines, int offset) {
   return lines.isNotEmpty ? lines.length - 1 : -1;
 }
 
-/// Returns the index of the line that holds the top-level `workspace` key,
-/// located through the parsed YAML structure rather than a raw `workspace:`
-/// substring scan.
-///
-/// A quoted key — `"workspace":` or `'workspace':` — is valid YAML and is
-/// indistinguishable from a plain `workspace:` key to the parser, yet a raw
-/// `startsWith('workspace:')` scan misses it and reports the section as
-/// missing. The key node's source span points at the key token regardless of
-/// quoting, so its start offset is mapped to a line index with
-/// [_lineIndexOfOffset]. Returns -1 when the content has no top-level
-/// `workspace` key — a condition [parseWorkspaceManifest] should already have
-/// rejected, so the caller fails closed.
-int _workspaceKeyLineIndex(String content, List<_Line> lines) {
-  YamlDocument doc;
-  try {
-    doc = loadYamlDocument(content);
-  } catch (_) {
-    // Content that cannot be re-parsed exposes no locatable workspace key;
-    // the caller fails closed on the -1 it receives.
-    return -1;
-  }
-  final root = doc.contents;
-  if (root is! YamlMap) return -1;
+/// YAML aliases resolve to the same node as their anchor. Editing a shared
+/// sequence would also change the value of a field outside `workspace`.
+bool _isWorkspaceListShared(
+  YamlMap root,
+  YamlNode workspaceKey,
+  YamlList list,
+) {
+  final visited = Set<YamlNode>.identity();
 
-  // Find the top-level key whose *value* is `workspace`, independent of how the
-  // key is quoted. `root.nodes` is keyed by the unquoted scalar value, so a
-  // quoted spelling still resolves; we read the key node's span to locate it.
-  YamlNode? keyNode;
-  for (final entry in root.nodes.entries) {
-    final key = entry.key;
-    if (key is YamlScalar && key.value == 'workspace') {
-      keyNode = key;
-      break;
+  bool referencesList(YamlNode node) {
+    if (identical(node, list)) return true;
+    if (!visited.add(node)) return false;
+    if (node is YamlMap) {
+      return node.nodes.entries.any(
+        (entry) => referencesList(entry.key) || referencesList(entry.value),
+      );
     }
+    return node is YamlList && node.nodes.any(referencesList);
   }
-  if (keyNode == null) return -1;
 
-  return _lineIndexOfOffset(lines, keyNode.span.start.offset);
-}
-
-/// Returns the top-level `workspace:` sequence node when it is written in
-/// flow style (`workspace: [a, b]`), or null when it is block style or cannot
-/// be located. Flow-vs-block is derived from the parsed node's `style` rather
-/// than a raw `[` scan: a plain-scalar member line such as
-/// `- packages/core[v2]` inside a block-style list must never be mistaken for
-/// the opening bracket.
-YamlList? _flowWorkspaceList(String content) {
-  YamlDocument doc;
-  try {
-    doc = loadYamlDocument(content);
-  } catch (_) {
-    // Content that cannot be re-parsed has no locatable flow list; the
-    // caller routes to the block editor, which fails closed downstream.
-    return null;
-  }
-  final root = doc.contents;
-  if (root is! YamlMap) return null;
-
-  for (final entry in root.nodes.entries) {
-    final key = entry.key;
-    if (key is YamlScalar && key.value == 'workspace') {
-      final node = entry.value;
-      if (node is YamlList && node.style == CollectionStyle.FLOW) return node;
-      return null;
-    }
-  }
-  return null;
+  return root.nodes.entries.any(
+    (entry) =>
+        !identical(entry.key, workspaceKey) &&
+        (referencesList(entry.key) || referencesList(entry.value)),
+  );
 }
 
 /// Rewrites [content] so that its `workspace:` membership list contains
@@ -453,26 +411,38 @@ String insertWorkspaceMember(
   WorkspaceManifest manifest,
   String packagePath,
 ) {
-  final lines = _splitLines(content);
-  final wsIndex = _workspaceKeyLineIndex(content, lines);
-  if (wsIndex == -1) {
-    // Validation should have caught this; fail closed.
+  final root = loadYamlDocument(content).contents;
+  final workspaceEntry = root is YamlMap
+      ? root.nodes.entries
+            .where(
+              (entry) =>
+                  entry.key is YamlScalar && entry.key.value == 'workspace',
+            )
+            .firstOrNull
+      : null;
+  final workspace = workspaceEntry?.value;
+  if (root is! YamlMap || workspaceEntry == null || workspace is! YamlList) {
     throw Exception(
-      '⚠️ Root workspace: "workspace:" section not found in root pubspec.yaml.',
+      '⚠️ Root workspace: "workspace:" sequence not found in root pubspec.yaml.',
+    );
+  }
+  final workspaceKey = workspaceEntry.key;
+  if (_isWorkspaceListShared(root, workspaceKey, workspace)) {
+    throw Exception(
+      '⚠️ Root workspace: cannot edit a "workspace:" list shared with another '
+      'field through a YAML alias. Give "workspace:" its own list in '
+      'pubspec.yaml and retry.',
     );
   }
 
-  // Detect the real flow-style list from the parsed workspace node rather
-  // than a raw `[` scan over the section body: with the column-one
-  // block-list extension, that body contains member lines, and a `[` inside a
-  // plain-scalar member line would otherwise be mistaken for the opening
-  // bracket. The bracket scan is then bounded to the node's own span.
-  final flowList = _flowWorkspaceList(content);
-  if (flowList != null) {
+  final lines = _splitLines(content);
+  final wsIndex = _lineIndexOfOffset(lines, workspaceKey.span.start.offset);
+  // A "[" inside a block-list member is part of that member's path.
+  if (workspace.style == CollectionStyle.FLOW) {
     final openIndex = _findTopLevelFlowOpen(
       content,
-      flowList.span.start.offset,
-      flowList.span.end.offset,
+      workspace.span.start.offset,
+      workspace.span.end.offset,
     );
     if (openIndex == -1) {
       // A flow node must contain its opening bracket; fail closed.
@@ -480,10 +450,10 @@ String insertWorkspaceMember(
         '⚠️ Root workspace: could not locate the opening bracket of the workspace list.',
       );
     }
-    return _editFlowStyle(content, lines, wsIndex, packagePath, openIndex);
+    return _editFlowStyle(content, packagePath, openIndex);
   }
   return _editBlockStyle(
-    content,
+    workspace,
     lines,
     wsIndex,
     packagePath,
@@ -495,13 +465,7 @@ String insertWorkspaceMember(
 /// for an empty list) right after the last member scalar, leaving the file
 /// valid. Existing members keep their original formatting — including any
 /// comments inside the list — everything else is unchanged.
-String _editFlowStyle(
-  String content,
-  List<_Line> lines,
-  int wsIndex,
-  String packagePath,
-  int openIndex,
-) {
+String _editFlowStyle(String content, String packagePath, int openIndex) {
   final closeIndex = _findMatchingClosingBracket(content, openIndex);
   if (closeIndex == -1) {
     throw Exception(
@@ -540,30 +504,14 @@ class _BlockMember {
 /// that merely looks like a member (e.g. a comment whose text starts with
 /// `- `) is never mistaken for one, because membership is derived from the
 /// parsed YAML rather than from a raw line regex. Returns an empty list when
-/// the sequence cannot be re-parsed or has no mappable members — the caller
+/// the sequence has no mappable members — the caller
 /// then falls back to the regex-based scan.
-List<_BlockMember> _blockMemberLocations(String content, List<_Line> lines) {
-  YamlDocument doc;
-  try {
-    doc = loadYamlDocument(content);
-  } catch (_) {
-    return const [];
-  }
-  final root = doc.contents;
-  if (root is! YamlMap) return const [];
-
-  YamlNode? workspaceNode;
-  for (final entry in root.nodes.entries) {
-    final key = entry.key;
-    if (key is YamlScalar && key.value == 'workspace') {
-      workspaceNode = entry.value;
-      break;
-    }
-  }
-  if (workspaceNode is! YamlList) return const [];
-
+List<_BlockMember> _blockMemberLocations(
+  YamlList workspace,
+  List<_Line> lines,
+) {
   final located = <_BlockMember>[];
-  for (final node in workspaceNode.nodes) {
+  for (final node in workspace.nodes) {
     if (node is! YamlScalar) continue;
     final lineIndex = _lineIndexOfOffset(lines, node.span.start.offset);
     if (lineIndex == -1) continue;
@@ -580,7 +528,7 @@ List<_BlockMember> _blockMemberLocations(String content, List<_Line> lines) {
 /// comments, blank lines, key order, CRLF line endings — is preserved
 /// byte-for-byte.
 String _editBlockStyle(
-  String content,
+  YamlList workspace,
   List<_Line> lines,
   int wsIndex,
   String packagePath,
@@ -593,7 +541,7 @@ String _editBlockStyle(
   // Identify the actual member lines through the parsed sequence and source
   // positions (not a raw line regex), and take the indentation of the last
   // member line: the inserted member belongs right after it.
-  final located = _blockMemberLocations(content, lines)
+  final located = _blockMemberLocations(workspace, lines)
       .where(
         (member) => member.lineIndex > wsIndex && member.lineIndex < sectionEnd,
       )

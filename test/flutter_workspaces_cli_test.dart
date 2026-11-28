@@ -4302,6 +4302,60 @@ dependencies:
       );
     });
 
+    test('an aliased workspace list leaves the anchor definition intact', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      const original =
+          'name: _\n'
+          'x-tool-members: &members [demo_app, packages/core]\n'
+          'workspace: *members\n';
+      final file = fs.file('pubspec.yaml')..writeAsStringSync(original);
+
+      expect(
+        () => process.updateRootPubspecSync(packageName: 'shared_ui'),
+        throwsA(
+          predicate(
+            (error) => error.toString().contains('through a YAML alias'),
+          ),
+        ),
+      );
+      expect(file.readAsStringSync(), equals(original));
+    });
+
+    test('a workspace anchor used by a nested field stays intact', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      const original =
+          'name: _\n'
+          'workspace: &members\n'
+          '- demo_app\n'
+          '- packages/core\n'
+          'x-tool:\n'
+          '  packages: [*members]\n';
+      final file = fs.file('pubspec.yaml')..writeAsStringSync(original);
+
+      expect(
+        () => process.updateRootPubspecSync(packageName: 'shared_ui'),
+        throwsA(
+          predicate(
+            (error) => error.toString().contains('through a YAML alias'),
+          ),
+        ),
+      );
+      expect(file.readAsStringSync(), equals(original));
+    });
+
+    test('an aliased wildcard list that needs no edit stays intact', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      const original =
+          'name: _\n'
+          'x-tool-members: &members [demo_app, "packages/*"]\n'
+          'workspace: *members\n';
+      final file = fs.file('pubspec.yaml')..writeAsStringSync(original);
+
+      process.updateRootPubspecSync(packageName: 'shared_ui');
+
+      expect(file.readAsStringSync(), equals(original));
+    });
+
     test('indented block list with a `[` member stays block-style', () {
       final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
       fs
