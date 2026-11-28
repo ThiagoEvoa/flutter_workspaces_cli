@@ -43,6 +43,27 @@ class SetupRunner {
 
       projectName = projectNameProcess.getProjectName(arguments: arguments);
 
+      // Reject the built-in shared package name (Issue #39). Setup ALWAYS
+      // generates `packages/<kCorePackageName>` (see [CorePackageProcess]); a
+      // workspace app whose own name equals that member name collides with it,
+      // so Flutter refuses to resolve the duplicate workspace members and the
+      // CLI rolls back after the scaffolding work. Fail fast here instead: throw
+      // an ArgumentError, which the `on ArgumentError` handler below routes to
+      // exit 64 with the setup usage. This runs BEFORE the read-only
+      // availability guard, BEFORE any Flutter/Dart subprocess, and BEFORE the
+      // workspace reservation or any filesystem write, so a rejected name leaves
+      // no workspace directory, no reservation sentinel, and no manifest behind.
+      // The check is setup-specific: `add-package` keeps its own workspace and
+      // destination checks and is deliberately not affected.
+      if (projectName == kCorePackageName) {
+        throw ArgumentError(
+          'Invalid project name "$projectName": the name '
+          '"$kCorePackageName" is reserved for the shared package that setup '
+          'always generates under packages/$kCorePackageName. Choose a '
+          'different app name.',
+        );
+      }
+
       // Exclusively reserve the workspace target path BEFORE any Flutter/Dart
       // process or filesystem write runs. An occupied path (an existing
       // directory, file, or link) is refused here, so an existing workspace

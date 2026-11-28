@@ -4097,6 +4097,92 @@ dependencies:
       );
     });
 
+    group('Core name (Issue #39): reject the built-in core package name', () {
+      // Setup always generates `packages/<kCorePackageName>`, so a workspace app
+      // named the same collides with that member and Flutter refuses to resolve
+      // the duplicate. The setup-specific check rejects it up front — before the
+      // read-only availability guard, before any Flutter/Dart subprocess, and
+      // before the reservation or any write — routing it to exit 64 with the
+      // setup usage. `add-package` keeps its own behavior and is unaffected.
+
+      test(
+        'setup --name core exits 64 with the core-reserved message and usage, '
+        'no effects (no flutter, no dir, no reservation, no manifest)',
+        () {
+          final initialDir = fs.directory('/test_core')..createSync();
+          fs.currentDirectory = initialDir;
+          final cli = buildCli();
+
+          expect(cli.run(['--name', 'core']), 64);
+
+          expect(errors, contains(contains('reserved for the shared package')));
+          expect(errors, contains(contains('Choose a different app name')));
+          expect(
+            errors,
+            contains(
+              contains('Usage: flutter_workspaces_cli [setup] --name <name>'),
+            ),
+          );
+          // Usage goes to stderr, not stdout.
+          expect(logs, isNot(contains(contains('Usage:'))));
+          // No workspace folder, reservation sentinel, or manifest is created.
+          expect(fs.directory('/test_core').listSync(), isEmpty);
+          // No Flutter/Dart subprocess was started for the rejected attempt.
+          verifyNever(() => runner.runSync(any(), any()));
+        },
+      );
+
+      test('explicit setup token + -n core also exits 64 with no effects', () {
+        final initialDir = fs.directory('/test_core_short')..createSync();
+        fs.currentDirectory = initialDir;
+        final cli = buildCli();
+
+        expect(cli.run(['setup', '-n', 'core']), 64);
+
+        expect(errors, contains(contains('reserved for the shared package')));
+        expect(
+          errors,
+          contains(
+            contains('Usage: flutter_workspaces_cli [setup] --name <name>'),
+          ),
+        );
+        expect(fs.directory('/test_core_short').listSync(), isEmpty);
+        verifyNever(() => runner.runSync(any(), any()));
+      });
+
+      test(
+        'setup --name core_tools still scaffolds (valid name, no regression)',
+        () {
+          final initialDir = fs.directory('/test')..createSync();
+          fs.currentDirectory = initialDir;
+          stubHappySetup();
+
+          final cli = buildCli();
+          expect(cli.run(['--name', 'core_tools']), 0);
+
+          expect(errors, isEmpty);
+          expect(
+            fs.directory('/test/core_tools_workspaces').existsSync(),
+            isTrue,
+          );
+          expect(logs, contains(contains('completed successfully')));
+        },
+      );
+
+      test('add-package --name core is NOT rejected by the setup-only check '
+          '(add-package keeps its own behavior)', () {
+        fs.directory('packages').createSync();
+        fs.file('pubspec.yaml').writeAsStringSync('workspace:\n  - my_app');
+        stubHappyAddPackage();
+
+        final cli = buildCli();
+        expect(cli.run(['add-package', '--name', 'core']), 0);
+
+        expect(errors, isEmpty);
+        expect(fs.file('packages/core/pubspec.yaml').existsSync(), isTrue);
+      });
+    });
+
     test('unknown flag --nope: exits 64 with usage on stderr', () {
       final cli = buildCli();
       expect(cli.run(['--nope', '--name', 'my_app']), 64);
