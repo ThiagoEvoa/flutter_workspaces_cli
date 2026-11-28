@@ -4,19 +4,27 @@
 // The mocked suite (test/flutter_workspaces_cli_test.dart) drives the CLI
 // against an in-memory FileSystem. THIS FILE is the compatibility boundary
 // for real filesystem semantics: package:file's LocalFileSystem on a temp
-// directory under the OS temp dir — real symlinks, real directories, real
+// directory under the OS temp dir — real files, real directories, real
 // path semantics — with the Flutter toolchain mocked exactly as in the
 // mocked tests (no real `flutter` subprocess runs, no real flutter anywhere).
 // The only real component is the filesystem.
 //
 // These tests exercise what memory-fs cannot cover:
-//  - the sentinel link is created by REAL symlinks (the atomic claim);
+//  - the sentinel is a REAL file created by an exclusive create (the atomic
+//    claim) and probed for as a file;
 //  - a dangling/broken symlink at a destination is detected and never
 //    deleted by rollback;
 //  - rollback against the real FS removes the reserved directory while
 //    leaving the invocation (parent) directory's files intact;
 //  - the workspace lock is held mid-run (observed inside the flutter
 //    subprocess hook) and released on completion.
+//
+// Issue #37: the claim moved from a symlink to an exclusive regular-file
+// create. On a real filesystem an existing entity (including a stale file
+// left by an interrupted run) at the sentinel path makes the exclusive
+// create fail; the CLI then treats it as a stale lock and recovers, so the
+// real-fs tests below create stale sentinels as *files* and probe for
+// *files*.
 import 'dart:convert';
 import 'dart:io' as io;
 
@@ -119,6 +127,88 @@ class FakeProcessRunner implements ProcessRunner {
   }
 }
 
+/// Best-effort "make [dir] non-writable on the real OS" that works where the
+/// platform enforces directory write permissions and *reports honestly* where it
+/// does not.
+///
+/// It clears the write bits via the platform `chmod` program (`chmod 500`, i.e.
+/// read + execute only) and then probes by attempting a real exclusive create of
+/// a probe file inside the directory. The probe is the authority: when it
+/// *succeeds* the platform did not gate the write (notably Windows, where
+/// `chmod` is absent or does not enforce directory write protection for a
+/// non-elevated account) and the function returns `false` so the caller can
+/// skip the test instead of producing a false result. When the probe *fails*,
+/// the directory is genuinely non-writable and `true` is returned, guaranteeing
+/// the caller's `createSync(exclusive: true)` will hit a real permission/IO
+/// error (not contention). On the POSIX runners/hosts that enforce `chmod` this
+/// always returns `true`.
+///
+/// It invokes the `chmod` *program* rather than `dart:io`'s
+/// `FileSystemEntity.chmod` deliberately: the Flutter-bundled `dart:io` used by
+/// `dart test` on this host (and inside the workspaces the CLI generates) does
+/// not expose that API, while the standalone Dart used by the CI `Real-FS` job
+/// does. Driving the probe through the real create keeps the assertion honest on
+/// every platform without depending on a specific `dart:io` surface. Callers
+/// must restore the write bit with [restoreDirWritable] before the parent can be
+/// cleaned up. The function is self-cleaning: when the platform cannot enforce a
+/// non-writable directory the write protection it attempted is immediately
+/// cleared, so the directory is left writable on the caller's skip path too. A
+/// top-level registry ([_nonWritableDirs]) plus the suite `tearDown` provide a
+/// final safety net that clears any leftover write protection before the temp
+/// tree is deleted, on every exit path.
+final _nonWritableDirs = <io.Directory>[];
+
+bool makeRealDirNonWritable(io.Directory dir) {
+  // Track the directory so the suite teardown can guarantee write protection is
+  // cleared before a recursive delete, even on a path that returns early (e.g.
+  // a skipped test whose `try/finally` never runs).
+  _nonWritableDirs.add(dir);
+  try {
+    io.Process.runSync('chmod', ['500', dir.path]);
+  } catch (_) {
+    // No `chmod` available (e.g. Windows): fall through to the probe, which
+    // reports the directory is still writable and lets the caller skip.
+  }
+  final probe = io.File('${dir.path}/.fws_write_probe');
+  try {
+    probe.createSync(exclusive: true);
+    // The write succeeded: not enforceable here. Clear any write protection we
+    // just attempted so the directory stays writable for teardown on this
+    // (skip) path — the caller's `try/finally` restore does not run when it
+    // returns early after `markTestSkipped`.
+    probe.deleteSync();
+    restoreDirWritable(dir);
+    return false;
+  } catch (_) {
+    // The write failed: the directory is genuinely non-writable.
+    return true;
+  }
+}
+
+/// Restores the write bit on [dir] so its parent can be cleaned up. Best-effort:
+/// a failure to restore (e.g. no `chmod`) is swallowed because the parent
+/// directory remains writable regardless, so teardown can still delete the tree.
+///
+/// On Windows `chmod 500` sets the directory read-only attribute, which a
+/// recursive `deleteSync` cannot remove; the `attrib -R` fallback clears that
+/// attribute where `chmod` alone does not, so the temp tree is always deletable.
+void restoreDirWritable(io.Directory dir) {
+  try {
+    io.Process.runSync('chmod', ['700', dir.path]);
+  } catch (_) {
+    // No `chmod`; the parent stays writable, so cleanup is unaffected.
+  }
+  if (io.Platform.isWindows) {
+    try {
+      // Clear the Windows read-only attribute that `chmod 500` may have set,
+      // which a recursive delete cannot otherwise remove.
+      io.Process.runSync('attrib', ['-R', dir.path]);
+    } catch (_) {
+      // No `attrib` (or nothing to clear); the delete stays best-effort.
+    }
+  }
+}
+
 void main() {
   late String originalCwd;
   late io.Directory tempDir;
@@ -135,6 +225,16 @@ void main() {
     // Always restore the process working directory first, then delete the
     // temp directory — deleting a directory that is the process cwd fails.
     fs.currentDirectory = originalCwd;
+    // Final safety net: clear any write protection attempted by
+    // [makeRealDirNonWritable] before the recursive delete. This runs on every
+    // exit path — including the skip path, where a test returns early after
+    // `markTestSkipped` and its own `try/finally` restore never runs — so a
+    // read-only child directory (e.g. on Windows) is always cleared first and
+    // `deleteSync(recursive: true)` cannot fail with an access-denied error.
+    for (final dir in _nonWritableDirs) {
+      restoreDirWritable(dir);
+    }
+    _nonWritableDirs.clear();
     if (tempDir.existsSync()) {
       tempDir.deleteSync(recursive: true);
     }
@@ -153,7 +253,7 @@ void main() {
         fs: fs,
         createHook: (_) {
           sentinelHeldDuringCreate = fs
-              .link(tempPath('.my_app_workspaces.reserved'))
+              .file(tempPath('.my_app_workspaces.reserved'))
               .existsSync();
         },
       );
@@ -191,7 +291,7 @@ void main() {
 
       // Sentinel released on success; the invocation-parent file is intact.
       expect(
-        fs.link(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        fs.file(tempPath('.my_app_workspaces.reserved')).existsSync(),
         isFalse,
       );
       expect(notesFile.readAsStringSync(), equals('keep me'));
@@ -232,7 +332,9 @@ void main() {
         ..writeAsStringSync('keep me');
       // Simulate an interrupted winner: the sentinel is left behind and the
       // workspace directory does not exist.
-      fs.link(tempPath('.my_app_workspaces.reserved')).createSync('reserved');
+      fs
+          .file(tempPath('.my_app_workspaces.reserved'))
+          .createSync(exclusive: true);
 
       final logs = <String>[];
       expect(
@@ -250,7 +352,7 @@ void main() {
       // Nothing was created; the stale sentinel is NOT deleted by the loser.
       expect(fs.directory('my_app_workspaces').existsSync(), isFalse);
       expect(
-        fs.link(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        fs.file(tempPath('.my_app_workspaces.reserved')).existsSync(),
         isTrue,
       );
       expect(notesFile.readAsStringSync(), equals('keep me'));
@@ -277,10 +379,66 @@ void main() {
       // app), the sentinel was released, and the parent file survives.
       expect(fs.directory('my_app_workspaces').existsSync(), isFalse);
       expect(
-        fs.link(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        fs.file(tempPath('.my_app_workspaces.reserved')).existsSync(),
         isFalse,
       );
       expect(notesFile.readAsStringSync(), equals('keep me'));
+    });
+
+    test('setup in a non-writable directory surfaces the permission/IO diagnostic '
+        '(ioError, not contended), creating nothing', () {
+      // Force a genuine permission/IO error (not contention): the workspace
+      // sentinel is created in the invocation directory, so a non-writable
+      // invocation directory makes the exclusive create fail with a real
+      // filesystem error. This exercises the runner-level ioError branch of
+      // [WorkspaceProcess.createWorkspaceFolderSync] (the "could not be
+      // reserved" diagnostic) that the raw-exception tests in
+      // test/reservation_test.dart do not reach through a runner.
+      final invocationDir = io.Directory('${tempDir.path}/readonly_invocation');
+      invocationDir.createSync();
+      // Skip honestly where the platform cannot enforce a non-writable directory
+      // (e.g. Windows, where chmod does not gate writes for a non-elevated
+      // account); on POSIX the probe confirms it is genuinely non-writable, so
+      // the createSync that follows hits a real permission/IO error.
+      final nonWritable = makeRealDirNonWritable(invocationDir);
+      if (!nonWritable) {
+        markTestSkipped(
+          'chmod cannot enforce a non-writable directory on this platform '
+          '(e.g. Windows); the ioError runner path is verified on the POSIX '
+          'CI leg.',
+        );
+        return;
+      }
+      try {
+        fs.currentDirectory = invocationDir;
+
+        final logs = <String>[];
+        expect(
+          () => SetupRunner(
+            fs: fs,
+            runner: FakeProcessRunner(fs: fs),
+            log: (m) => logs.add(m),
+            errorLog: (m) => logs.add(m),
+          ).run(['--name', 'my_app']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // The ioError runner diagnostic surfaced (not the contended one),
+        // naming the affected sentinel path.
+        expect(logs, contains(contains('could not be reserved')));
+        expect(logs, contains(contains('permission or file-system error')));
+        expect(logs, isNot(contains('already reserved or occupied')));
+
+        // Nothing was created in the non-writable invocation directory: no
+        // workspace folder and no sentinel left behind.
+        expect(fs.directory('my_app_workspaces').existsSync(), isFalse);
+        expect(fs.file('my_app_workspaces').existsSync(), isFalse);
+      } finally {
+        // Restore the write bit so the parent can clean up the temp tree, and
+        // restore the process working directory out of the invocation dir.
+        restoreDirWritable(invocationDir);
+        fs.currentDirectory = tempDir;
+      }
     });
   });
 
@@ -310,10 +468,10 @@ void main() {
           fs: fs,
           createHook: (_) {
             lockHeldDuringCreate = fs
-                .link(tempPath('.flutter_workspaces_cli.lock'))
+                .file(tempPath('.flutter_workspaces_cli.lock'))
                 .existsSync();
             destinationHeldDuringCreate = fs
-                .link(tempPath('packages/.new_pkg.reserved'))
+                .file(tempPath('packages/.new_pkg.reserved'))
                 .existsSync();
           },
         );
@@ -341,11 +499,11 @@ void main() {
         // Workspace lock and destination reservation released; the pre-existing
         // broken symlink is untouched.
         expect(
-          fs.link(tempPath('.flutter_workspaces_cli.lock')).existsSync(),
+          fs.file(tempPath('.flutter_workspaces_cli.lock')).existsSync(),
           isFalse,
         );
         expect(
-          fs.link(tempPath('packages/.new_pkg.reserved')).existsSync(),
+          fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
           isFalse,
         );
         expect(fs.link(tempPath('packages/broken_link')).existsSync(), isTrue);
@@ -390,11 +548,11 @@ void main() {
         // Lock and destination reservation released; the dangling symlink
         // survives the rollback.
         expect(
-          fs.link(tempPath('.flutter_workspaces_cli.lock')).existsSync(),
+          fs.file(tempPath('.flutter_workspaces_cli.lock')).existsSync(),
           isFalse,
         );
         expect(
-          fs.link(tempPath('packages/.new_pkg.reserved')).existsSync(),
+          fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
           isFalse,
         );
         expect(fs.link(tempPath('packages/broken_link')).existsSync(), isTrue);
@@ -406,7 +564,9 @@ void main() {
       layoutWorkspace();
       // Simulate an interrupted winner: the destination reservation is left
       // behind and the package directory does not exist.
-      fs.link(tempPath('packages/.new_pkg.reserved')).createSync('reserved');
+      fs
+          .file(tempPath('packages/.new_pkg.reserved'))
+          .createSync(exclusive: true);
 
       final logs = <String>[];
       expect(
@@ -429,7 +589,7 @@ void main() {
         equals('workspace:\n  - app\n'),
       );
       expect(
-        fs.link(tempPath('packages/.new_pkg.reserved')).existsSync(),
+        fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
         isTrue,
       );
     });
@@ -458,13 +618,76 @@ void main() {
       // The dangling symlink is untouched and no reserved sentinel survives.
       expect(fs.link(tempPath('packages/new_pkg')).existsSync(), isTrue);
       expect(
-        fs.link(tempPath('packages/.new_pkg.reserved')).existsSync(),
+        fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
         isFalse,
       );
       expect(
         fs.file(tempPath('pubspec.yaml')).readAsStringSync(),
         equals('workspace:\n  - app\n'),
       );
+    });
+
+    test('add-package in a non-writable packages directory surfaces the '
+        'permission/IO diagnostic (ioError, not contended), touching nothing', () {
+      // Force a genuine permission/IO error (not contention): the per-package
+      // sentinel is created in the `packages` directory, so a non-writable
+      // `packages` makes the exclusive create fail with a real filesystem
+      // error. This exercises the runner-level ioError branch of
+      // [AddPackageRunner] (the "could not be reserved" diagnostic) that the
+      // raw-exception tests in test/reservation_test.dart do not reach through
+      // a runner.
+      layoutWorkspace();
+      final packagesDir = io.Directory(tempPath('packages'));
+      // Skip honestly where the platform cannot enforce a non-writable directory
+      // (e.g. Windows, where chmod does not gate writes for a non-elevated
+      // account); on POSIX the probe confirms it is genuinely non-writable.
+      final nonWritable = makeRealDirNonWritable(packagesDir);
+      if (!nonWritable) {
+        markTestSkipped(
+          'chmod cannot enforce a non-writable directory on this platform '
+          '(e.g. Windows); the ioError runner path is verified on the POSIX '
+          'CI leg.',
+        );
+        return;
+      }
+      try {
+        final logs = <String>[];
+        expect(
+          () => AddPackageRunner(
+            fs: fs,
+            runner: FakeProcessRunner(fs: fs),
+            log: (m) => logs.add(m),
+            errorLog: (m) => logs.add(m),
+          ).run(['--name', 'new_pkg']),
+          throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+        );
+
+        // The ioError runner diagnostic surfaced (not the contended one),
+        // naming the affected sentinel path.
+        expect(logs, contains(contains('could not be reserved')));
+        expect(logs, contains(contains('permission or file-system error')));
+        expect(logs, isNot(contains('already reserved')));
+
+        // Nothing was created or changed: no package directory, the manifest is
+        // untouched, and no sentinel was left behind (the pre-existing broken
+        // link inside packages/ is never touched either).
+        expect(
+          fs.directory(tempPath('packages/new_pkg')).existsSync(),
+          isFalse,
+        );
+        expect(
+          fs.file(tempPath('pubspec.yaml')).readAsStringSync(),
+          equals('workspace:\n  - app\n'),
+        );
+        expect(
+          fs.file(tempPath('packages/.new_pkg.reserved')).existsSync(),
+          isFalse,
+        );
+      } finally {
+        // Restore the write bit so the temp tree (including the pre-existing
+        // broken link inside packages/) can be cleaned up.
+        restoreDirWritable(packagesDir);
+      }
     });
   });
 
@@ -585,7 +808,7 @@ void main() {
         isTrue,
       );
       expect(
-        fs.link(tempPath('.my_app_workspaces.reserved')).existsSync(),
+        fs.file(tempPath('.my_app_workspaces.reserved')).existsSync(),
         isFalse,
         reason: 'the winner releases its reservation on success',
       );

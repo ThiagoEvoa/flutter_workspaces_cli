@@ -133,7 +133,7 @@ Every CLI invocation guards the paths it would otherwise touch with an **atomic 
 
 ### How the reservation works
 
-`package:file` 7.x exposes no atomic exclusive-create for directories or files: `Directory.createSync` is silent on an existing path, and `File.createSync(exclusive: true)` is dropped (the parameter is deliberately ignored). The one creation primitive through the abstraction that is atomic on both backends is **`Link.createSync`** — it throws when the path is already occupied. The reservations are therefore dangling sentinel **links** with the same name as the path they guard, created next to the real target:
+`package:file` 7.x cannot supply the atomic primitive the reservation needs: `Directory.createSync` is silent on an existing path, and its `File.createSync(exclusive: true)` drops the `exclusive` parameter (the parameter is deliberately ignored — dartbug.com/49647), so neither can reject an occupied path. The atomic claim therefore goes through `dart:io` directly: `File.createSync(path, exclusive: true)` is a compare-and-set — `open(O_CREAT | O_EXCL | O_WRONLY)` on POSIX and `CreateFile` with `CREATE_NEW` on Windows — so exactly one invocation wins and the rest fail fast. Because the sentinel is an **ordinary file**, it needs neither an elevated token nor Windows Developer Mode. The reservations are therefore sentinel **files** with the same name as the path they guard, created next to the real target:
 
 - **`setup`** — one sentinel next to the workspace folder it will create: `.<folderName>.reserved` in the invocation directory (e.g. `.my_app_workspaces.reserved` for `--name my_app`). The directory is created after the sentinel claim; an occupied target refuses before any Flutter/Dart subprocess runs. The directory is created only after the sentinel claim succeeds.
 - **`add-package`** — two sentinels, both released on every exit path:
@@ -149,11 +149,12 @@ A run that would start after another run already holds the claim stops immediate
 ```
 ⚠️ Target path "my_app_workspaces" already exists. Refusing to overwrite it. Aborting setup.
 ⚠️ Target path "my_app_workspaces" is already reserved or occupied. Refusing to overwrite it. Aborting setup. Details: ...
-⚠️ the workspace lock is already reserved: another flutter_workspaces_cli run is in progress, or a previous run was interrupted and left a reservation sentinel behind at "<workspace>/.flutter_workspaces_cli.lock". If no other run is in progress, remove the sentinel file manually (see the README "Retries and stale locks" section) and retry. Details: ...
-⚠️ Target directory "packages/my_feature" is already reserved: another flutter_workspaces_cli run is in progress, or a previous run was interrupted and left a reservation behind. Refusing to overwrite it. Aborting. Details: ...
+⚠️ the workspace lock is already reserved: another flutter_workspaces_cli run is in progress, or a previous run was interrupted and left a reservation behind at "<workspace>/.flutter_workspaces_cli.lock". If no other run is in progress, remove that file manually (see the README "Retries and stale locks" section) and retry. Details: ...
+⚠️ Target directory "packages/my_feature" is already reserved: another flutter_workspaces_cli run is in progress, or a previous run was interrupted and left a reservation behind at "packages/.my_feature.reserved". Refusing to overwrite it. Aborting. Details: ...
+⚠️ Target directory "packages/my_feature" could not be reserved: a permission or file-system error prevented creating the reservation at "packages/.my_feature.reserved". Refusing to proceed. Aborting. Details: ...
 ```
 
-The read-only guard and the atomic claim produce distinct, friendly messages — the guard fires before any subprocess runs, the claim closes the TOCTOU window between two concurrent runs.
+The read-only guard and the atomic claim produce distinct, friendly messages — the guard fires before any subprocess runs, the claim closes the TOCTOU window between two concurrent runs. The two claim failures are reported separately: an occupied path reports **contention** (with the recovery steps), while a permission or file-system error that prevented the sentinel from being created is reported **as such**. Both name the affected path and retain the underlying error.
 
 ### Retries and stale locks
 
@@ -166,9 +167,9 @@ To clear a stale lock — **only when no other run is actually in progress** —
 
 After removing the file, retry the command. If deletion is refused (e.g. another run is genuinely in progress, or files are missing), the release is skipped and the original error is still reported.
 
-### Windows requirement
+### Windows compatibility
 
-The sentinel is a **symlink** (via `Link.createSync` in `package:file` → `dart:io`). Creating a symlink on Windows requires **Windows Developer Mode or an elevated token** (`SeCreateSymbolicLinkPrivilege`). On a Windows machine or CI runner without that right, sentinel creation fails — the CLI reports the acquisition failure as a friendly `already reserved` error and refuses to proceed. The Windows CI legs (`Real-FS` job) verify the mechanism where the runner permits it; they are not a claim that the mechanism works on every Windows setup, only that the real-filesystem tests pass on the CI runners where symlink creation is permitted. macOS and Linux need no extra privilege.
+The sentinel is an **ordinary file** created with `dart:io`'s exclusive create (`File.createSync(exclusive: true)` → `CreateFile` with `CREATE_NEW` on Windows, `open(O_CREAT | O_EXCL | O_WRONLY)` on POSIX). It needs **no elevated token and no Windows Developer Mode**: a standard, non-elevated Windows account can create it in a writable directory, so both `setup` and `add-package` run for an ordinary user. This replaces the previous sentinel *symlink* (`Link.createSync`), whose creation required `SeCreateSymbolicLinkPrivilege` and failed for a standard user without Developer Mode. The CI `Real-FS` job runs the real-filesystem suite — including the two-process race and stale-reservation recovery, on both `ubuntu-latest` and `windows-latest` — and is how the non-elevated Windows behavior is verified; macOS and Linux likewise need no extra privilege.
 
 ### Workspace-level serialization
 

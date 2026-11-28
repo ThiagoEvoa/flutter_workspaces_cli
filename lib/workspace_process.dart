@@ -494,7 +494,7 @@ class WorkspaceProcess {
   /// existing workspace with user files is never touched and no subprocess is
   /// invoked for a rejected attempt. This is the read-only, friendly early
   /// check; [createWorkspaceFolderSync] performs the atomic claim (sentinel
-  /// link) before the directory is created.
+  /// file) before the directory is created.
   ///
   /// Parameters:
   /// - `projectName`: base name for the workspace (e.g. `my_app`). The guarded
@@ -511,7 +511,7 @@ class WorkspaceProcess {
     // a directory, a file, and a link (including a dangling link) so any
     // pre-existing entry at the target is detected. This is the friendly
     // early guard only — it is deliberately not the atomic reservation. The
-    // atomic claim (a sentinel link, see [createWorkspaceFolderSync]) is what
+    // atomic claim (a sentinel file, see [createWorkspaceFolderSync]) is what
     // closes the TOCTOU window between two concurrent runs.
     if (dir.existsSync() ||
         base.childFile(folderName).existsSync() ||
@@ -531,14 +531,16 @@ class WorkspaceProcess {
   /// an existing workspace with user files is never overwritten, and two
   /// overlapping setup runs cannot both claim the same name.
   ///
-  /// The atomic claim is a **sentinel link** (`<base>/.<folderName>.reserved`)
-  /// created next to the target: `Link.createSync` is the one creation primitive
-  /// through `package:file` that is atomic on both backends — both
-  /// `Directory.createSync` and `File.createSync(exclusive: true)` are silent on
-  /// an existing path — so the sentinel is the reservation mechanism and the
-  /// `existsSync` guard is only the friendly early check. Exactly one invocation
-  /// can claim the sentinel, so the overlapping-runs race is eliminated even when
-  /// both runs pass the read-only guard.
+  /// The atomic claim is a **sentinel file** (`<base>/.<folderName>.reserved`)
+  /// created next to the target with `dart:io`'s exclusive file create (`File`
+  /// `createSync(exclusive: true)` — see [RunReservation]). That primitive is
+  /// atomic on every platform and, being an ordinary file, needs neither an
+  /// elevated token nor Windows Developer Mode; it is the mechanism that lets a
+  /// standard Windows account run the CLI. `package:file` cannot supply it (its
+  /// `File.createSync` drops `exclusive`), so the claim goes through `dart:io`
+  /// directly. Exactly one invocation can claim the sentinel, so the
+  /// overlapping-runs race is eliminated even when both runs pass the read-only
+  /// guard.
   ///
   /// Returns a [ReservedWorkspace] holding the exact [Directory] reserved by this
   /// invocation and the [RunReservation] sentinel, which the caller must release
@@ -565,9 +567,10 @@ class WorkspaceProcess {
     // pre-scaffold guard at the point of creation.
     assertWorkspaceFolderAvailableSync(projectName: projectName);
 
-    // Atomic reservation: create the sentinel link next to the target. If another
-    // run already holds the reservation (or a previous run was interrupted and
-    // left the sentinel behind), this throws before any directory is created.
+    // Atomic reservation: create the sentinel file next to the target. If
+    // another run already holds the reservation (or a previous run was
+    // interrupted and left the sentinel behind), this throws before any
+    // directory is created.
     final sentinelPath = '${base.path}/.$folderName.reserved';
     final RunReservation reservation;
     try {
@@ -576,13 +579,23 @@ class WorkspaceProcess {
         sentinelPath: sentinelPath,
         contextLabel: 'the workspace directory "$folderName"',
       );
-    } catch (e) {
-      // Acquisition failed — map it to the same friendly "already exists" style
-      // error so an occupied path reports identically whether it was found by the
-      // read-only guard, by the sentinel claim, or both.
+    } on ReservationAcquisitionException catch (e) {
+      // The atomic claim failed. Report it with the same friendly framing as the
+      // read-only guard, but keep the two failure kinds distinct: an occupied
+      // path is "reserved or occupied" (with the recovery steps), while a
+      // permission/IO error that prevented the create is reported as such. Both
+      // name the target and retain the underlying error.
+      if (e.failure == ReservationAcquisitionFailure.contended) {
+        throw Exception(
+          '⚠️ Target path "$folderName" is already reserved or occupied. '
+          'Refusing to overwrite it. Aborting setup. Details: ${e.underlying}',
+        );
+      }
       throw Exception(
-        '⚠️ Target path "$folderName" is already reserved or occupied. '
-        'Refusing to overwrite it. Aborting setup. Details: $e',
+        '⚠️ Target path "$folderName" could not be reserved: a permission or '
+        'file-system error prevented creating the reservation at '
+        '"${e.sentinelPath}". Refusing to proceed. Aborting setup. '
+        'Details: ${e.underlying}',
       );
     }
 
@@ -599,7 +612,10 @@ class WorkspaceProcess {
       // different invocation is not blocked by a stale claim of this run.
       final releaseError = reservation.release();
       if (releaseError != null) {
-        log('⚠️ Failed to release the workspace reservation: $releaseError');
+        log(
+          '⚠️ Failed to release the workspace reservation at '
+          '"${reservation.sentinelPath}": $releaseError',
+        );
       }
       rethrow;
     }
