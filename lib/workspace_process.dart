@@ -362,17 +362,73 @@ int _lineOffset(List<_Line> lines, int index) {
   return offset;
 }
 
+/// Returns the index of the line that contains the character at absolute
+/// content [offset] within [lines] — the inverse of [_lineOffset], using the
+/// same line split the surgical editors operate on. Returns the final line
+/// index when [offset] is at or past the end of the content.
+int _lineIndexOfOffset(List<_Line> lines, int offset) {
+  var accumulated = 0;
+  for (var i = 0; i < lines.length; i++) {
+    final end = accumulated + lines[i].text.length + lines[i].ending.length;
+    if (offset < end) return i;
+    accumulated = end;
+  }
+  return lines.isNotEmpty ? lines.length - 1 : -1;
+}
+
+/// Returns the index of the line that holds the top-level `workspace` key,
+/// located through the parsed YAML structure rather than a raw `workspace:`
+/// substring scan.
+///
+/// A quoted key — `"workspace":` or `'workspace':` — is valid YAML and is
+/// indistinguishable from a plain `workspace:` key to the parser, yet a raw
+/// `startsWith('workspace:')` scan misses it and reports the section as
+/// missing. The key node's source span points at the key token regardless of
+/// quoting, so its start offset is mapped to a line index with
+/// [_lineIndexOfOffset]. Returns -1 when the content has no top-level
+/// `workspace` key — a condition [parseWorkspaceManifest] should already have
+/// rejected, so the caller fails closed.
+int _workspaceKeyLineIndex(String content, List<_Line> lines) {
+  YamlDocument doc;
+  try {
+    doc = loadYamlDocument(content);
+  } catch (_) {
+    // Content that cannot be re-parsed exposes no locatable workspace key;
+    // the caller fails closed on the -1 it receives.
+    return -1;
+  }
+  final root = doc.contents;
+  if (root is! YamlMap) return -1;
+
+  // Find the top-level key whose *value* is `workspace`, independent of how the
+  // key is quoted. `root.nodes` is keyed by the unquoted scalar value, so a
+  // quoted spelling still resolves; we read the key node's span to locate it.
+  YamlNode? keyNode;
+  for (final entry in root.nodes.entries) {
+    final key = entry.key;
+    if (key is YamlScalar && key.value == 'workspace') {
+      keyNode = key;
+      break;
+    }
+  }
+  if (keyNode == null) return -1;
+
+  return _lineIndexOfOffset(lines, keyNode.span.start.offset);
+}
+
 /// Rewrites [content] so that its `workspace:` membership list contains
 /// [packagePath], preserving everything else byte-for-byte.
+///
+/// The workspace section is located through the parsed YAML structure (the
+/// `workspace` key node's source span), so a quoted key (`"workspace":` or
+/// `'workspace':`) is handled exactly like a plain `workspace:` key.
 String insertWorkspaceMember(
   String content,
   WorkspaceManifest manifest,
   String packagePath,
 ) {
   final lines = _splitLines(content);
-  final wsIndex = lines.indexWhere(
-    (line) => line.text.startsWith('workspace:'),
-  );
+  final wsIndex = _workspaceKeyLineIndex(content, lines);
   if (wsIndex == -1) {
     // Validation should have caught this; fail closed.
     throw Exception(
