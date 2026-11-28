@@ -359,19 +359,10 @@ int _workspaceSectionEnd(List<_Line> lines, int wsIndex) {
   return lines.length;
 }
 
-/// Returns the absolute content offset of line [index].
-int _lineOffset(List<_Line> lines, int index) {
-  var offset = 0;
-  for (var i = 0; i < index; i++) {
-    offset += lines[i].text.length + lines[i].ending.length;
-  }
-  return offset;
-}
-
 /// Returns the index of the line that contains the character at absolute
-/// content [offset] within [lines] — the inverse of [_lineOffset], using the
-/// same line split the surgical editors operate on. Returns the final line
-/// index when [offset] is at or past the end of the content.
+/// content [offset] within [lines], using the same line split the surgical
+/// editors operate on. Returns the final line index when [offset] is at or
+/// past the end of the content.
 int _lineIndexOfOffset(List<_Line> lines, int offset) {
   var accumulated = 0;
   for (var i = 0; i < lines.length; i++) {
@@ -422,6 +413,35 @@ int _workspaceKeyLineIndex(String content, List<_Line> lines) {
   return _lineIndexOfOffset(lines, keyNode.span.start.offset);
 }
 
+/// Returns the top-level `workspace:` sequence node when it is written in
+/// flow style (`workspace: [a, b]`), or null when it is block style or cannot
+/// be located. Flow-vs-block is derived from the parsed node's `style` rather
+/// than a raw `[` scan: a plain-scalar member line such as
+/// `- packages/core[v2]` inside a block-style list must never be mistaken for
+/// the opening bracket.
+YamlList? _flowWorkspaceList(String content) {
+  YamlDocument doc;
+  try {
+    doc = loadYamlDocument(content);
+  } catch (_) {
+    // Content that cannot be re-parsed has no locatable flow list; the
+    // caller routes to the block editor, which fails closed downstream.
+    return null;
+  }
+  final root = doc.contents;
+  if (root is! YamlMap) return null;
+
+  for (final entry in root.nodes.entries) {
+    final key = entry.key;
+    if (key is YamlScalar && key.value == 'workspace') {
+      final node = entry.value;
+      if (node is YamlList && node.style == CollectionStyle.FLOW) return node;
+      return null;
+    }
+  }
+  return null;
+}
+
 /// Rewrites [content] so that its `workspace:` membership list contains
 /// [packagePath], preserving everything else byte-for-byte.
 ///
@@ -442,17 +462,24 @@ String insertWorkspaceMember(
     );
   }
 
-  // Detect the real flow-style list from the section body, not from a raw
-  // line substring: a `[` inside a comment or a quoted string on the
-  // workspace line must never be mistaken for the opening bracket.
-  final sectionEndIndex = _workspaceSectionEnd(lines, wsIndex);
-  final openIndex = _findTopLevelFlowOpen(
-    content,
-    _lineOffset(lines, wsIndex),
-    _lineOffset(lines, sectionEndIndex),
-  );
-
-  if (openIndex != -1) {
+  // Detect the real flow-style list from the parsed workspace node rather
+  // than a raw `[` scan over the section body: with the column-one
+  // block-list extension, that body contains member lines, and a `[` inside a
+  // plain-scalar member line would otherwise be mistaken for the opening
+  // bracket. The bracket scan is then bounded to the node's own span.
+  final flowList = _flowWorkspaceList(content);
+  if (flowList != null) {
+    final openIndex = _findTopLevelFlowOpen(
+      content,
+      flowList.span.start.offset,
+      flowList.span.end.offset,
+    );
+    if (openIndex == -1) {
+      // A flow node must contain its opening bracket; fail closed.
+      throw Exception(
+        '⚠️ Root workspace: could not locate the opening bracket of the workspace list.',
+      );
+    }
     return _editFlowStyle(content, lines, wsIndex, packagePath, openIndex);
   }
   return _editBlockStyle(

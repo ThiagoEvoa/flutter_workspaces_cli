@@ -4265,6 +4265,72 @@ dependencies:
         expect(after.replaceAll('\r\n', ''), isNot(contains('\n')));
       },
     );
+
+    // Review follow-up (PR #49, finding F1): a plain-scalar block-style member
+    // line containing `[` must not be mistaken for a flow-style list opener.
+    // The edit must keep the list block-style and insert the member at the
+    // list's own indentation instead of injecting the new member inside the
+    // bracket text.
+    test('column-one block list with a `[` member stays block-style', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync(
+            'name: _\n'
+            'workspace:\n'
+            '- demo_app\n'
+            '- packages/core[v2]\n',
+          );
+
+      process.updateRootPubspecSync(packageName: 'shared_ui');
+
+      final after = fs.file('pubspec.yaml').readAsStringSync();
+      expect(
+        after,
+        equals(
+          'name: _\n'
+          'workspace:\n'
+          '- demo_app\n'
+          '- packages/core[v2]\n'
+          '- packages/shared_ui\n',
+        ),
+      );
+      expect(after.split('packages/shared_ui').length - 1, equals(1));
+      expect(
+        parseWorkspaceManifest(after).members,
+        equals(['demo_app', 'packages/core[v2]', 'packages/shared_ui']),
+      );
+    });
+
+    test('indented block list with a `[` member stays block-style', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync(
+            'name: _\n'
+            'workspace:\n'
+            '    - demo_app\n'
+            '    - packages/core[v2]\n',
+          );
+
+      process.updateRootPubspecSync(packageName: 'shared_ui');
+
+      final after = fs.file('pubspec.yaml').readAsStringSync();
+      expect(
+        after,
+        equals(
+          'name: _\n'
+          'workspace:\n'
+          '    - demo_app\n'
+          '    - packages/core[v2]\n'
+          '    - packages/shared_ui\n',
+        ),
+      );
+      expect(
+        parseWorkspaceManifest(after).members,
+        equals(['demo_app', 'packages/core[v2]', 'packages/shared_ui']),
+      );
+    });
   });
 
   // ---------------------------------------------------------------------------
