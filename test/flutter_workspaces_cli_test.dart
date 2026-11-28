@@ -2092,16 +2092,34 @@ workspace:
       final runner2 = MockProcessRunner();
       final logs2 = <String>[];
 
-      // The workspace reservation sentinel link. The stub is stateful:
-      // acquisition records the sentinel as created so release actually
-      // deletes it.
+      // The workspace reservation sentinels. Two distinct paths are claimed in
+      // this run: the beside-sentinel that guards the reserved directory
+      // (`/work/.compete_app_workspaces.reserved`) and the workspace-wide lock
+      // the add-package flow also takes. In this mock, `currentDirectory` reads
+      // always resolve to the invocation dir `/work`, so the lock resolves to
+      // `/work/.flutter_workspaces_cli.lock` here (the real filesystem nests it
+      // inside the reserved dir; the real-fs tests exercise that). Each sentinel
+      // is a stateful stub: acquisition records it as created so release actually
+      // deletes it. Routing each path to its own mock keeps the two releases
+      // independent, so the single-delete verification below is precise.
       final sentinelLink = MockLink();
       var sentinelCreated = false;
-      when(() => mockFs.link(any())).thenReturn(sentinelLink);
+      final lockLink = MockLink();
+      var lockCreated = false;
+      when(
+        () => mockFs.link('/work/.compete_app_workspaces.reserved'),
+      ).thenReturn(sentinelLink);
+      when(
+        () => mockFs.link('/work/.flutter_workspaces_cli.lock'),
+      ).thenReturn(lockLink);
       when(() => sentinelLink.createSync(any())).thenAnswer((_) {
         sentinelCreated = true;
       });
       when(() => sentinelLink.existsSync()).thenAnswer((_) => sentinelCreated);
+      when(() => lockLink.createSync(any())).thenAnswer((_) {
+        lockCreated = true;
+      });
+      when(() => lockLink.existsSync()).thenAnswer((_) => lockCreated);
 
       // currentDirectory reads return baseDir; the restore setter is a no-op on
       // the mock, so the rollback path exercises without touching it.
@@ -2172,6 +2190,9 @@ workspace:
       expect(logs2, contains(contains('cannot delete reserved directory')));
       // The workspace reservation sentinel is deleted on the failure exit path.
       verify(() => sentinelLink.deleteSync()).called(1);
+      // ...and so is the workspace lock the add-package flow also takes: a
+      // failed setup must release it too, so a later retry is never blocked.
+      verify(() => lockLink.deleteSync()).called(1);
     });
 
     test('(d) two attempts for the same name: exactly one succeeds, the '
