@@ -113,15 +113,28 @@ class SetupRunner {
         );
       } on ReservationAcquisitionException catch (e) {
         // Uncontended in production (the directory was just reserved
-        // exclusively), but if another run is in progress or a stale lock was
-        // left behind, refuse with a clear busy/retry message and let the outer
-        // handler roll back this run's own output.
+        // exclusively), but keep the two failure kinds distinct, matching the
+        // add-package and workspace-directory handlers: an occupied lock reports
+        // the busy/retry diagnostic (with the stale-lock removal hint), while a
+        // permission/IO error that prevented the claim is reported as such and
+        // never suggests removing a reservation that was never created. Both
+        // name the affected path and retain the underlying error, and both route
+        // to the outer handler's rollback (exit code 1).
+        if (e.failure == ReservationAcquisitionFailure.contended) {
+          throw Exception(
+            '⚠️ The workspace lock is already reserved: another '
+            'flutter_workspaces_cli run is in progress on this workspace, or a '
+            'previous run was interrupted and left a reservation behind at '
+            '"${e.sentinelPath}". If no other run is in progress, remove that '
+            'file manually and retry. Aborting setup. Details: ${e.underlying}',
+          );
+        }
         throw Exception(
-          '⚠️ The workspace lock is already reserved: another '
-          'flutter_workspaces_cli run is in progress on this workspace, or a '
-          'previous run was interrupted and left a reservation behind at '
-          '"${e.sentinelPath}". If no other run is in progress, remove that '
-          'file manually and retry. Aborting setup. Details: ${e.underlying}',
+          '⚠️ The workspace lock could not be reserved: a permission or '
+          'file-system error prevented creating the reservation at '
+          '"${e.sentinelPath}". A standard, non-elevated account should be '
+          'able to create this ordinary file — verify the path is writable and '
+          'retry. Aborting setup. Details: ${e.underlying}',
         );
       }
 
