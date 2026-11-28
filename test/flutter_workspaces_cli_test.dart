@@ -2545,6 +2545,182 @@ workspace:
   });
 
   // ---------------------------------------------------------------------------
+  // Issue #44: preserve permission and I/O errors when setup acquires the shared
+  // workspace lock. The inner lock is acquired *after* the outer workspace
+  // reservation succeeds, so the runner must keep the two failure kinds distinct:
+  // an occupied lock is the busy/retry diagnostic, while a permission/IO error
+  // that prevented the claim is reported as such (naming the path and cause)
+  // and must NOT suggest removing a reservation that was never created.
+  // ---------------------------------------------------------------------------
+  group('SetupRunner (Issue #44: preserve lock permission/IO errors)', () {
+    // The inner lock lives inside the just-reserved workspace directory, so on
+    // this filesystem it resolves to this path once the working directory has
+    // moved into the reserved folder.
+    const lockPath = '/work/my_app_workspaces/.flutter_workspaces_cli.lock';
+
+    void stubToolchain(MockProcessRunner runner) {
+      when(
+        () => runner.runSync('flutter', ['--version'], runInShell: true),
+      ).thenReturn(ProcessRunnerResult(exitCode: 0, stdout: '', stderr: ''));
+      when(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+          stderr: '',
+        ),
+      );
+    }
+
+    test('an occupied inner workspace lock surfaces the busy/retry diagnostic, '
+        'rolls back, and releases the outer reservation', () {
+      // A contending run already holds the lock: the moment setup attempts the
+      // exclusive claim, the lock sentinel exists, so setup's claim fails and
+      // the existence probe sees it present -> contended. Created as a link
+      // because the in-memory backend probes the sentinel as a link.
+      late MemoryFileSystem fs;
+      var armed = false;
+      fs = MemoryFileSystem(
+        opHandle: (context, op) {
+          if (op == FileSystemOp.create && context == lockPath && !armed) {
+            armed = true;
+            fs.link(lockPath).createSync('reserved');
+          }
+        },
+      );
+      fs.directory('/work').createSync();
+      // An unrelated path that must survive the rollback untouched.
+      final sibling = fs.file('/work/notes.txt')..writeAsStringSync('keep me');
+      fs.currentDirectory = fs.directory('/work');
+
+      final runner = MockProcessRunner();
+      stubToolchain(runner);
+      final logs = <String>[];
+
+      expect(
+        () => SetupRunner(
+          fs: fs,
+          runner: runner,
+          log: logs.add,
+          errorLog: logs.add,
+        ).run(['--name', 'my_app']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // The busy/retry diagnostic names the lock path and the recovery step.
+      expect(
+        logs,
+        contains(contains('The workspace lock is already reserved')),
+      );
+      expect(logs, contains(contains(lockPath)));
+      expect(logs, contains(contains('remove that file manually')));
+
+      // Setup stopped before scaffolding: no `flutter create` ran and the run
+      // did not complete.
+      expect(
+        logs,
+        isNot(contains(contains('Flutter workspace setup completed'))),
+      );
+      verifyNever(
+        () => runner.runSync(
+          'flutter',
+          ['create', 'my_app'],
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: true,
+        ),
+      );
+
+      // The partial workspace was rolled back, the outer reservation was
+      // released, and the unrelated sibling was left intact.
+      expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+      expect(
+        fs.file('/work/.my_app_workspaces.reserved').existsSync(),
+        isFalse,
+      );
+      expect(sibling.readAsStringSync(), equals('keep me'));
+    });
+
+    test('an I/O failure acquiring the inner workspace lock reports the lock path '
+        'and the original cause, with no stale-lock removal instruction, and '
+        'rolls back', () {
+      // A genuine permission/IO error prevents the lock from being created at
+      // all: the claim throws and the sentinel is never written, so the
+      // existence probe sees "not claimed" and the failure classifies as
+      // ioError (not contended).
+      late MemoryFileSystem fs;
+      fs = MemoryFileSystem(
+        opHandle: (context, op) {
+          if (op == FileSystemOp.create && context == lockPath) {
+            throw io.FileSystemException('permission denied', context);
+          }
+        },
+      );
+      fs.directory('/work').createSync();
+      final sibling = fs.file('/work/notes.txt')..writeAsStringSync('keep me');
+      fs.currentDirectory = fs.directory('/work');
+
+      final runner = MockProcessRunner();
+      stubToolchain(runner);
+      final logs = <String>[];
+
+      expect(
+        () => SetupRunner(
+          fs: fs,
+          runner: runner,
+          log: logs.add,
+          errorLog: logs.add,
+        ).run(['--name', 'my_app']),
+        throwsA(isA<ExitException>().having((e) => e.code, 'code', 1)),
+      );
+
+      // The ioError diagnostic names the lock path, reports the original cause,
+      // and is the "could not be reserved" wording — NOT the busy/retry one.
+      expect(
+        logs,
+        contains(contains('The workspace lock could not be reserved')),
+      );
+      expect(logs, contains(contains('permission or file-system error')));
+      expect(logs, contains(contains(lockPath)));
+      // The original error is retained, not swallowed.
+      expect(logs, contains(contains('permission denied')));
+      // Crucially, it must NOT tell the user to remove a lock that was never
+      // created.
+      expect(logs, isNot(contains(contains('remove that file manually'))));
+      expect(logs, isNot(contains(contains('is already reserved'))));
+
+      // Setup stopped before scaffolding.
+      expect(
+        logs,
+        isNot(contains(contains('Flutter workspace setup completed'))),
+      );
+      verifyNever(
+        () => runner.runSync(
+          'flutter',
+          ['create', 'my_app'],
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: true,
+        ),
+      );
+
+      // The lock was never created, so the loser neither holds nor releases it;
+      // the partial workspace is rolled back, the outer reservation is
+      // released, and the unrelated sibling is left intact.
+      expect(fs.link(lockPath).existsSync(), isFalse);
+      expect(fs.directory('/work/my_app_workspaces').existsSync(), isFalse);
+      expect(
+        fs.file('/work/.my_app_workspaces.reserved').existsSync(),
+        isFalse,
+      );
+      expect(sibling.readAsStringSync(), equals('keep me'));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Issue #12: fail CLI commands when Flutter subprocesses exit unsuccessfully.
   // ---------------------------------------------------------------------------
   group('Issue #12: fail on Flutter subprocess errors', () {
