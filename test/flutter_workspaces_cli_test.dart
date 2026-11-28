@@ -1854,6 +1854,103 @@ workspace:
       );
       expect(logs, contains(contains('Directory "packages" not found')));
     });
+
+    test('Issue #43: run adds a package when the workspace key is quoted', () {
+      final addPackageRunner = AddPackageRunner(
+        fs: fs,
+        runner: runner,
+        log: logger,
+      );
+
+      // A valid workspace root whose `workspace:` key is double-quoted — valid
+      // YAML that Flutter resolves, which the pre-fix editor missed and reported
+      // as a missing workspace section after preflight had already accepted it.
+      final originalRoot =
+          'name: _\n'
+          'description: "root manifest"\n'
+          '"workspace":\n'
+          '  - packages/core\n'
+          '  - packages/feature\n';
+      fs.directory('packages').createSync();
+      fs.file('pubspec.yaml').writeAsStringSync(originalRoot);
+
+      when(
+        () => runner.runSync('flutter', [
+          '--version',
+          '--machine',
+        ], runInShell: true),
+      ).thenReturn(
+        ProcessRunnerResult(
+          exitCode: 0,
+          stdout:
+              '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+          stderr: '',
+        ),
+      );
+
+      when(
+        () => runner.runSync(
+          'flutter',
+          any(),
+          workingDirectory: any(named: 'workingDirectory'),
+          runInShell: any(named: 'runInShell'),
+        ),
+      ).thenAnswer((invocation) {
+        final args = invocation.positionalArguments[1] as List<String>;
+        if (args.join(' ') == '--version --machine') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout:
+                '{"frameworkVersion": "3.27.0", "flutterRoot": "/opt/flutter", "channel": "stable", "dartSdkVersion": "3.12.0"}',
+            stderr: '',
+          );
+        }
+        if (args.join(' ') == '--version') {
+          return ProcessRunnerResult(
+            exitCode: 0,
+            stdout: 'Dart SDK version: 3.12.0',
+            stderr: '',
+          );
+        }
+        if (args.contains('create')) {
+          final packageName = args.last;
+          final workingDir =
+              invocation.namedArguments[#workingDirectory] as String?;
+          final path = workingDir != null
+              ? '$workingDir/$packageName'
+              : packageName;
+          fs.directory(path).createSync(recursive: true);
+        }
+        return ProcessRunnerResult(exitCode: 0, stdout: '', stderr: '');
+      });
+
+      // The command completes successfully for the quoted-key root manifest.
+      addPackageRunner.run(['--name', 'new_pkg']);
+
+      // The generated package exists ...
+      expect(fs.file('packages/new_pkg/pubspec.yaml').existsSync(), isTrue);
+
+      // ... and the new member was appended to the quoted-key list, with the
+      // quoted key spelling and the unrelated root content preserved.
+      final after = fs.file('pubspec.yaml').readAsStringSync();
+      expect(
+        after,
+        equals(
+          'name: _\n'
+          'description: "root manifest"\n'
+          '"workspace":\n'
+          '  - packages/core\n'
+          '  - packages/feature\n'
+          '  - packages/new_pkg\n',
+        ),
+      );
+      // The new member appears exactly once, and the quoted key / unrelated
+      // content are intact.
+      expect(after.split('packages/new_pkg').length - 1, equals(1));
+      expect(after, contains('"workspace":'));
+      expect(after, contains('description: "root manifest"'));
+      expect(logs, contains(contains('Package "new_pkg" added successfully!')));
+    });
   });
 
   group('SetupRunner', () {
@@ -3530,6 +3627,183 @@ dependencies:
         final manifest = parseWorkspaceManifest(after);
         expect(manifest.members, equals(['packages/a', 'packages/new_pkg']));
         expect(after, contains('# note'));
+      },
+    );
+
+    // -------------------------------------------------------------------------
+    // Issue #43: quoted workspace keys ("workspace": / 'workspace':).
+    // The editor must locate the section through the parsed YAML structure so
+    // a quoted key is handled like a plain key, in both block and flow style.
+    // -------------------------------------------------------------------------
+    test(
+      'Issue #43: double-quoted block key inserts a member and keeps unrelated content intact',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        final original =
+            'name: _\n'
+            'description: "root"\n'
+            '"workspace":\n'
+            '  - packages/core\n'
+            '  - packages/feature\n'
+            '\n'
+            '# trailing comment\n'
+            'dependencies:\n'
+            '  flutter: null\n';
+        fs.file('pubspec.yaml').writeAsStringSync(original);
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+
+        // The new member is appended to the block list; the existing members,
+        // the quoted key spelling, the unrelated keys, the blank line and the
+        // comment are all preserved byte-for-byte.
+        expect(
+          after,
+          equals(
+            'name: _\n'
+            'description: "root"\n'
+            '"workspace":\n'
+            '  - packages/core\n'
+            '  - packages/feature\n'
+            '  - packages/new_pkg\n'
+            '\n'
+            '# trailing comment\n'
+            'dependencies:\n'
+            '  flutter: null\n',
+          ),
+        );
+
+        // The new member appears exactly once and the file re-parses.
+        expect(after.split('packages/new_pkg').length - 1, equals(1));
+        expect(after, contains('"workspace":'));
+        expect(after, contains('description: "root"'));
+        expect(after, contains('# trailing comment'));
+        final manifest = parseWorkspaceManifest(after);
+        expect(
+          manifest.members,
+          equals(['packages/core', 'packages/feature', 'packages/new_pkg']),
+        );
+      },
+    );
+
+    test('Issue #43: single-quoted block key inserts a member', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync("name: _\n'workspace':\n  - packages/core\n");
+
+      process.updateRootPubspecSync(packageName: 'new_pkg');
+
+      expect(
+        fs.file('pubspec.yaml').readAsStringSync(),
+        equals(
+          "name: _\n'workspace':\n  - packages/core\n  - packages/new_pkg\n",
+        ),
+      );
+    });
+
+    test(
+      'Issue #43: double-quoted flow key inserts a member into the flow list',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync(
+              'name: _\n"workspace": [packages/core, packages/feature]\n',
+            );
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+        expect(
+          after,
+          equals(
+            'name: _\n"workspace": [packages/core, packages/feature, packages/new_pkg]\n',
+          ),
+        );
+        expect(after.split('packages/new_pkg').length - 1, equals(1));
+      },
+    );
+
+    test(
+      'Issue #43: single-quoted flow key inserts a member into the flow list',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync(
+              "name: _\n'workspace': [packages/core, packages/feature]\n",
+            );
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+        expect(
+          after,
+          equals(
+            "name: _\n'workspace': [packages/core, packages/feature, packages/new_pkg]\n",
+          ),
+        );
+        expect(after.split('packages/new_pkg').length - 1, equals(1));
+      },
+    );
+
+    test('Issue #43: double-quoted block key preserves CRLF line endings', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync(
+            'name: _\r\n"workspace":\r\n  - packages/core\r\n  - packages/feature\r\n',
+          );
+
+      process.updateRootPubspecSync(packageName: 'new_pkg');
+
+      final after = fs.file('pubspec.yaml').readAsStringSync();
+      expect(
+        after,
+        equals(
+          'name: _\r\n"workspace":\r\n  - packages/core\r\n  - packages/feature\r\n  - packages/new_pkg\r\n',
+        ),
+      );
+      // Every newline is a CRLF: after stripping CRLF pairs no lone LF remains.
+      expect(after.replaceAll('\r\n', ''), isNot(contains('\n')));
+    });
+
+    test(
+      'Issue #43: a quoted key with a non-sequence value is still rejected',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        final original = 'name: _\n"workspace": 123\n';
+        fs.file('pubspec.yaml').writeAsStringSync(original);
+
+        // Validation runs before any write, so the file is left untouched.
+        expect(
+          () => process.updateRootPubspecSync(packageName: 'new_pkg'),
+          throwsA(
+            isA<Exception>().having(
+              (e) => e.toString(),
+              'message',
+              contains('must be a sequence of strings'),
+            ),
+          ),
+        );
+        expect(fs.file('pubspec.yaml').readAsStringSync(), equals(original));
+      },
+    );
+
+    test(
+      'Issue #43: a quoted key with a wildcard member still covers new packages',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        final original = 'name: _\n"workspace":\n  - packages/*\n';
+        fs.file('pubspec.yaml').writeAsStringSync(original);
+
+        process.updateRootPubspecSync(packageName: 'new_pkg');
+
+        // The wildcard covers the new package, so nothing is inserted.
+        expect(fs.file('pubspec.yaml').readAsStringSync(), equals(original));
+        expect(logs, contains(contains('Wildcard "packages/*" detected')));
       },
     );
   });
