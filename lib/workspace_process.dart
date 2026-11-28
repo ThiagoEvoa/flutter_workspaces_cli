@@ -492,9 +492,59 @@ String _editFlowStyle(
   return content.substring(0, lastEnd) + insertion + content.substring(lastEnd);
 }
 
-/// Surgical block-style edit: inserts a new `  - <packagePath>` line at the
-/// end of the member list (after the last member line). Everything else —
-/// keys, comments, blank lines, key order, CRLF line endings — is preserved
+/// A block-style workspace member as located through the parsed sequence:
+/// the line index of the member and the leading indentation (whitespace run)
+/// of that line.
+class _BlockMember {
+  final int lineIndex;
+  final String indentation;
+
+  const _BlockMember({required this.lineIndex, required this.indentation});
+}
+
+/// Identifies the actual block-style member lines of the workspace sequence
+/// through the parsed sequence and the member scalars' source spans. A line
+/// that merely looks like a member (e.g. a comment whose text starts with
+/// `- `) is never mistaken for one, because membership is derived from the
+/// parsed YAML rather than from a raw line regex. Returns an empty list when
+/// the sequence cannot be re-parsed or has no mappable members — the caller
+/// then falls back to the regex-based scan.
+List<_BlockMember> _blockMemberLocations(String content, List<_Line> lines) {
+  YamlDocument doc;
+  try {
+    doc = loadYamlDocument(content);
+  } catch (_) {
+    return const [];
+  }
+  final root = doc.contents;
+  if (root is! YamlMap) return const [];
+
+  YamlNode? workspaceNode;
+  for (final entry in root.nodes.entries) {
+    final key = entry.key;
+    if (key is YamlScalar && key.value == 'workspace') {
+      workspaceNode = entry.value;
+      break;
+    }
+  }
+  if (workspaceNode is! YamlList) return const [];
+
+  final located = <_BlockMember>[];
+  for (final node in workspaceNode.nodes) {
+    if (node is! YamlScalar) continue;
+    final lineIndex = _lineIndexOfOffset(lines, node.span.start.offset);
+    if (lineIndex == -1) continue;
+    final text = lines[lineIndex].text;
+    final indentation = RegExp(r'^\s*').firstMatch(text)?.group(0) ?? '';
+    located.add(_BlockMember(lineIndex: lineIndex, indentation: indentation));
+  }
+  return located;
+}
+
+/// Surgical block-style edit: inserts a new `<indentation>- <packagePath>`
+/// line at the end of the member list (after the last member line), matching
+/// the indentation of the existing sequence entries. Everything else — keys,
+/// comments, blank lines, key order, CRLF line endings — is preserved
 /// byte-for-byte.
 String _editBlockStyle(
   String content,
@@ -507,11 +557,30 @@ String _editBlockStyle(
   // after the `workspace:` line.
   final sectionEnd = _workspaceSectionEnd(lines, wsIndex);
 
-  // Find the last member line within the section.
+  // Identify the actual member lines through the parsed sequence and source
+  // positions (not a raw line regex), and take the indentation of the last
+  // member line: the inserted member belongs right after it.
+  final located = _blockMemberLocations(content, lines)
+      .where(
+        (member) => member.lineIndex > wsIndex && member.lineIndex < sectionEnd,
+      )
+      .toList();
+
   var lastMember = -1;
-  for (var i = wsIndex + 1; i < sectionEnd; i++) {
-    if (RegExp(r'^\s*-\s').hasMatch(lines[i].text)) {
-      lastMember = i;
+  var indentation = '  ';
+  if (located.isNotEmpty) {
+    lastMember = located.last.lineIndex;
+    indentation = located.last.indentation;
+  } else {
+    // Fallback: a member the parser could not map — keep the regex-based scan.
+    for (var i = wsIndex + 1; i < sectionEnd; i++) {
+      if (RegExp(r'^\s*-\s').hasMatch(lines[i].text)) {
+        lastMember = i;
+      }
+    }
+    if (lastMember != -1) {
+      indentation =
+          RegExp(r'^\s*').firstMatch(lines[lastMember].text)?.group(0) ?? '';
     }
   }
   final insertAt = lastMember == -1 ? wsIndex + 1 : lastMember + 1;
@@ -523,11 +592,11 @@ String _editBlockStyle(
       lines.isNotEmpty &&
       lines.last.ending.isEmpty) {
     lines[lines.length - 1] = _Line(lines.last.text, lineEnding);
-    lines.add(_Line('  - $packagePath', ''));
+    lines.add(_Line('$indentation- $packagePath', ''));
     return lines.map((line) => line.toString()).join();
   }
 
-  lines.insert(insertAt, _Line('  - $packagePath', lineEnding));
+  lines.insert(insertAt, _Line('$indentation- $packagePath', lineEnding));
   return lines.map((line) => line.toString()).join();
 }
 

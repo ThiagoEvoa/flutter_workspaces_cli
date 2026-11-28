@@ -3984,6 +3984,163 @@ dependencies:
     );
   });
 
+  // -----------------------------------------------------------------------------
+  // Issue #47: block-style workspace list indentation is preserved on insert.
+  // The editor always wrote `  - <member>` regardless of the existing
+  // members' indentation, so a four-space list produced an invalid manifest.
+  // The new member must use the indentation of the existing sequence entries.
+  // -----------------------------------------------------------------------------
+  group('Issue #47: block-style list indentation is preserved', () {
+    test(
+      'four-space block list: new member hyphen aligns with the existing entries',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync(
+              'name: _\n'
+              'workspace:\n'
+              '    - demo_app\n'
+              '    - packages/core\n',
+            );
+
+        process.updateRootPubspecSync(packageName: 'shared_ui');
+
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+        expect(
+          after,
+          equals(
+            'name: _\n'
+            'workspace:\n'
+            '    - demo_app\n'
+            '    - packages/core\n'
+            '    - packages/shared_ui\n',
+          ),
+        );
+        expect(after.split('packages/shared_ui').length - 1, equals(1));
+        expect(
+          parseWorkspaceManifest(after).members,
+          equals(['demo_app', 'packages/core', 'packages/shared_ui']),
+        );
+      },
+    );
+
+    test('four-space block list with a quoted workspace key', () {
+      final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+      fs
+          .file('pubspec.yaml')
+          .writeAsStringSync(
+            "name: _\n'workspace':\n    - demo_app\n    - packages/core\n",
+          );
+
+      process.updateRootPubspecSync(packageName: 'shared_ui');
+
+      final after = fs.file('pubspec.yaml').readAsStringSync();
+      expect(
+        after,
+        equals(
+          "name: _\n'workspace':\n    - demo_app\n    - packages/core\n"
+          '    - packages/shared_ui\n',
+        ),
+      );
+      expect(
+        parseWorkspaceManifest(after).members,
+        equals(['demo_app', 'packages/core', 'packages/shared_ui']),
+      );
+    });
+
+    test(
+      'four-space block list preserves comments, blank lines and unrelated content byte-for-byte',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        const original =
+            'name: _\n'
+            '# a comment about the workspace\n'
+            'workspace:\n'
+            '    # leading comment inside the list\n'
+            '    - demo_app\n'
+            '    - packages/core\n'
+            '\n'
+            'dependencies:\n'
+            '  flutter:\n'
+            '    sdk: flutter\n';
+        fs.file('pubspec.yaml').writeAsStringSync(original);
+
+        process.updateRootPubspecSync(packageName: 'shared_ui');
+
+        expect(
+          fs.file('pubspec.yaml').readAsStringSync(),
+          equals(
+            'name: _\n'
+            '# a comment about the workspace\n'
+            'workspace:\n'
+            '    # leading comment inside the list\n'
+            '    - demo_app\n'
+            '    - packages/core\n'
+            '    - packages/shared_ui\n'
+            '\n'
+            'dependencies:\n'
+            '  flutter:\n'
+            '    sdk: flutter\n',
+          ),
+        );
+      },
+    );
+
+    test(
+      'four-space block list without a trailing newline keeps the missing newline',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync(
+              'workspace:\n    - demo_app\n    - packages/core',
+            );
+
+        process.updateRootPubspecSync(packageName: 'shared_ui');
+
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+        expect(
+          after,
+          equals(
+            'workspace:\n    - demo_app\n    - packages/core\n'
+            '    - packages/shared_ui',
+          ),
+        );
+        expect(after.endsWith('\n'), isFalse);
+        expect(
+          parseWorkspaceManifest(after).members,
+          equals(['demo_app', 'packages/core', 'packages/shared_ui']),
+        );
+      },
+    );
+
+    test(
+      'four-space block list with CRLF line endings preserves the convention',
+      () {
+        final process = WorkspaceProcess(fs: fs, runner: runner, log: logger);
+        fs
+            .file('pubspec.yaml')
+            .writeAsStringSync(
+              'workspace:\r\n    - demo_app\r\n    - packages/core\r\n',
+            );
+
+        process.updateRootPubspecSync(packageName: 'shared_ui');
+
+        final after = fs.file('pubspec.yaml').readAsStringSync();
+        expect(
+          after,
+          equals(
+            'workspace:\r\n    - demo_app\r\n    - packages/core\r\n'
+            '    - packages/shared_ui\r\n',
+          ),
+        );
+        // Every newline is a CRLF: no lone LF remains.
+        expect(after.replaceAll('\r\n', ''), isNot(contains('\n')));
+      },
+    );
+  });
+
   // ---------------------------------------------------------------------------
   // Issue #18: unified CLI argument validation, help, and exit codes.
   // ---------------------------------------------------------------------------
