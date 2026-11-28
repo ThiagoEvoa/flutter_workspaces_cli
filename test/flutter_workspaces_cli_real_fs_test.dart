@@ -817,6 +817,108 @@ void main() {
         reason: 'the winner releases its reservation on success',
       );
     }, timeout: const Timeout(Duration(seconds: 120)));
+
+    // AC#3 / Issue #38: "Concurrent work on independent workspaces remains
+    // possible." Two real OS processes run setup for DIFFERENT names against the
+    // SAME parent directory. Distinct names produce distinct reservations:
+    // distinct `.<name>_workspaces.reserved` sentinels beside the parent and
+    // distinct `<name>_workspaces/.flutter_workspaces_cli.lock` in-folder locks,
+    // so the two runs do not contend and both complete. This is the mirror image
+    // of the same-name race above (where exactly one wins): here BOTH must win,
+    // which proves the coordination does not serialize unrelated workspaces.
+    test(
+      'two independent workspaces (different names) set up concurrently do not '
+      'contend; each claims its own sentinel and in-folder lock (AC#3 / #38)',
+      () async {
+        final probeScript = io.File(
+          '${packageRoot()}/test/helpers/concurrency_probe.dart',
+        ).absolute.path;
+        expect(
+          io.File(probeScript).existsSync(),
+          isTrue,
+          reason: 'the probe script must exist to be spawned',
+        );
+
+        final processA = await io.Process.start('dart', [
+          probeScript,
+          tempDir.path,
+          'alpha_ws',
+        ], workingDirectory: packageRoot());
+        final processB = await io.Process.start('dart', [
+          probeScript,
+          tempDir.path,
+          'beta_ws',
+        ], workingDirectory: packageRoot());
+
+        // Drain stdout AND stderr concurrently (the Windows pipe-buffer pitfall the
+        // same-name race above guards against): attach the reads before awaiting
+        // the exit codes.
+        final stdoutAFuture = processA.stdout.transform(utf8.decoder).join();
+        final stderrAFuture = processA.stderr.transform(utf8.decoder).join();
+        final stdoutBFuture = processB.stdout.transform(utf8.decoder).join();
+        final stderrBFuture = processB.stderr.transform(utf8.decoder).join();
+        final exitA = await processA.exitCode;
+        final exitB = await processB.exitCode;
+        final stdoutA = await stdoutAFuture;
+        final stderrA = await stderrAFuture;
+        final stdoutB = await stdoutBFuture;
+        final stderrB = await stderrBFuture;
+
+        // No contention on a shared gate: BOTH independent workspaces complete.
+        expect(
+          exitA,
+          equals(0),
+          reason:
+              'workspace A (alpha_ws) must complete; stderr: $stderrA; stdout: $stdoutA',
+        );
+        expect(
+          exitB,
+          equals(0),
+          reason:
+              'workspace B (beta_ws) must complete; stderr: $stderrB; stdout: $stdoutB',
+        );
+
+        // Both workspaces exist under the shared parent, each with its OWN
+        // (distinct) reservation: the sentinel beside it and the in-folder lock
+        // inside it. Both reservations are released on the success path, which
+        // confirms two distinct reservations coexisted (no shared gate contended).
+        expect(
+          fs.directory(tempPath('alpha_ws_workspaces')).existsSync(),
+          isTrue,
+        );
+        expect(
+          fs.directory(tempPath('beta_ws_workspaces')).existsSync(),
+          isTrue,
+        );
+        expect(
+          fs.file(tempPath('.alpha_ws_workspaces.reserved')).existsSync(),
+          isFalse,
+          reason: 'a completed setup releases its own reservation sentinel',
+        );
+        expect(
+          fs.file(tempPath('.beta_ws_workspaces.reserved')).existsSync(),
+          isFalse,
+          reason: 'a completed setup releases its own reservation sentinel',
+        );
+        expect(
+          fs
+              .file(
+                tempPath('alpha_ws_workspaces/.flutter_workspaces_cli.lock'),
+              )
+              .existsSync(),
+          isFalse,
+          reason: 'a completed setup releases its in-folder lock',
+        );
+        expect(
+          fs
+              .file(tempPath('beta_ws_workspaces/.flutter_workspaces_cli.lock'))
+              .existsSync(),
+          isFalse,
+          reason: 'a completed setup releases its in-folder lock',
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 120)),
+    );
   });
 
   // Issue #38: mixed-command coordination. setup and add-package must take ONE
@@ -942,6 +1044,159 @@ void main() {
         competingWroteLockfile,
         isFalse,
         reason: 'a refused add-package must not write the lockfile',
+      );
+
+      // A successful setup completed and released BOTH reservations, so the
+      // workspace is fully built and the lock is free.
+      expect(fs.directory(tempPath('my_app_workspaces')).existsSync(), isTrue);
+      expect(
+        fs
+            .file(tempPath('my_app_workspaces/.flutter_workspaces_cli.lock'))
+            .existsSync(),
+        isFalse,
+        reason: 'a completed setup releases the workspace lock',
+      );
+
+      // AC#2: the same add-package that was refused now completes once setup
+      // released the lock. It runs from the workspace root, as a user would.
+      fs.currentDirectory = fs.directory(tempPath('my_app_workspaces'));
+      AddPackageRunner(
+        fs: fs,
+        runner: FakeProcessRunner(fs: fs),
+        log: (_) {},
+      ).run(['--name', 'new_pkg']);
+
+      expect(
+        fs
+            .directory(tempPath('my_app_workspaces/packages/new_pkg'))
+            .existsSync(),
+        isTrue,
+        reason: 'a retry after a successful setup must complete',
+      );
+      expect(notesFile.readAsStringSync(), equals('keep me'));
+    });
+
+    test('a competing add-package driven AFTER the root manifest is written is '
+        'refused by the shared workspace lock (not "Workspace root not found"), '
+        'scaffolds nothing, and a retry completes (F-1 / AC#1)', () {
+      // F-1 strengthens the success case. The earlier test in this group drives
+      // the competing add-package at the FIRST `flutter create` (the app-create),
+      // when the root manifest does not yet exist, so the add-package is refused
+      // at "Workspace root not found" regardless of the lock. That makes its
+      // "left no output" assertions near-vacuous with respect to the shared lock:
+      // a mutation that un-shares the lock still passes that earlier test, because
+      // the add-package is refused for a different reason (a missing manifest).
+      //
+      // This test drives the competing add-package at a LATER sync point: the
+      // core-package create, the SECOND `flutter create` fire, by which time
+      // createRootPubspecSync and createPackagesFolderSync have run. The add-
+      // package therefore PASSES manifest validation and can be refused ONLY by
+      // the workspace lock setup still holds. If the lock were not shared, the
+      // add-package would proceed and scaffold new_pkg; the "scaffolded nothing"
+      // assertion below guards the shared lock (verified by the mutation sanity
+      // check in the correction notes).
+      final notesFile = fs.file(tempPath('notes.txt'))
+        ..writeAsStringSync('keep me');
+
+      var refusedDuringActiveSetup = false;
+      var competingScaffoldedPackage = false;
+      var competingWroteLockfile = false;
+      var competingRefusedByLock = false;
+      var competingRefusedByMissingManifest = false;
+      final competingLogs = <String>[];
+
+      // The createHook fires on every `flutter create`. Drive the competing
+      // add-package only on the core-package create: the first fire whose
+      // argument name is `core` (the SECOND `flutter create`, which happens
+      // after the manifest and packages/ exist). Never on the app-create. The
+      // `ranCompeting` flag guards against re-entry: a refused add-package is
+      // refused at the lock and never reaches its own `flutter create`, so it
+      // cannot re-enter this hook; the flag is a belt-and-suspenders guard.
+      var ranCompeting = false;
+      final setupRunner = FakeProcessRunner(
+        fs: fs,
+        createHook: (arguments) {
+          if (ranCompeting || arguments.last != 'core') {
+            return;
+          }
+          ranCompeting = true;
+          runCompetingAddPackage(
+            packageName: 'new_pkg',
+            logSink: competingLogs,
+            onOutcome: (refused) => refusedDuringActiveSetup = refused,
+            captureAfterRefusal: () {
+              // After the competing add-package returned, did it leave any of its
+              // own output in the half-built workspace? It was refused at the
+              // lock (before any write), so it scaffolded no package and wrote
+              // neither the root manifest nor the lockfile.
+              competingScaffoldedPackage = fs
+                  .directory(tempPath('my_app_workspaces/packages/new_pkg'))
+                  .existsSync();
+              competingWroteLockfile = fs
+                  .file(tempPath('my_app_workspaces/pubspec.lock'))
+                  .existsSync();
+            },
+          );
+          // Classify the refusal cause from the add-package's own output. At this
+          // sync point the manifest exists, so "already reserved" (the lock) must
+          // be the cause, not "Workspace root not found" (a validation failure).
+          final joined = competingLogs.join('\n');
+          competingRefusedByLock = joined.contains('already reserved');
+          competingRefusedByMissingManifest = joined.contains(
+            'Workspace root not found',
+          );
+        },
+      );
+
+      // A successful setup, active throughout the competing add-package's run.
+      SetupRunner(
+        fs: fs,
+        runner: setupRunner,
+        log: (_) {},
+        errorLog: (_) {},
+      ).run(['--name', 'my_app']);
+
+      // AC#1 (F-1): the competing add-package was refused while setup held the
+      // lock...
+      expect(
+        refusedDuringActiveSetup,
+        isTrue,
+        reason:
+            'the competing add-package must be refused while setup is active',
+      );
+      // ... and the refusal is the SHARED LOCK, not a missing manifest: at this
+      // sync point the manifest exists, so the add-package passed validation and
+      // was refused at the lock acquire (the message names the lock).
+      expect(
+        competingRefusedByLock,
+        isTrue,
+        reason:
+            'the refusal must be the shared workspace lock, not a missing manifest',
+      );
+      expect(
+        competingRefusedByMissingManifest,
+        isFalse,
+        reason:
+            'the add-package is driven after the manifest is written, so it must '
+            'not be refused at "Workspace root not found"',
+      );
+      // ... and it left none of its own output in the half-built workspace: no
+      // package directory and no root lockfile. The root manifest is NOT a
+      // meaningful "no output" guard here: the workspace's `packages/*` member
+      // makes a completing add-package skip the manifest edit, so the manifest's
+      // absence does not by itself prove the add-package was refused. The
+      // scaffolded-package and refusal-message checks do the guarding.
+      expect(
+        competingScaffoldedPackage,
+        isFalse,
+        reason:
+            'a refused add-package must not scaffold into the workspace; if the '
+            'lock were not shared it would scaffold new_pkg here',
+      );
+      expect(
+        competingWroteLockfile,
+        isFalse,
+        reason: 'a refused add-package must not write the root lockfile',
       );
 
       // A successful setup completed and released BOTH reservations, so the
