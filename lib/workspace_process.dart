@@ -340,6 +340,11 @@ int _lastFlowMemberEnd(String content, int openIndex, int closeIndex) {
 /// Returns the index of the first line where the workspace section ends:
 /// the first column-0, non-empty, non-comment line after the `workspace:`
 /// line. Returns `lines.length` when the section runs to the end of the file.
+///
+/// A column-0 line that is a block-list entry (`- ...`) stays inside the
+/// section: a valid block sequence may start its hyphens in column one
+/// (`workspace:\n- demo_app\n- packages/core`), so such a line must never be
+/// mistaken for the start of the next top-level section.
 int _workspaceSectionEnd(List<_Line> lines, int wsIndex) {
   for (var i = wsIndex + 1; i < lines.length; i++) {
     final raw = lines[i].text;
@@ -347,6 +352,7 @@ int _workspaceSectionEnd(List<_Line> lines, int wsIndex) {
     if (trimmed.isEmpty) continue;
     if (trimmed.startsWith('#')) continue;
     if (!RegExp(r'^\s').hasMatch(raw)) {
+      if (RegExp(r'^-(\s|$)').hasMatch(raw)) continue;
       return i;
     }
   }
